@@ -130,15 +130,8 @@ dmypy.json
 
 **.DS_Store
 
-*.npy filter=lfs diff=lfs merge=lfs -text
-*.mat filter=lfs diff=lfs merge=lfs -text
-*.npz filter=lfs diff=lfs merge=lfs -text
-# *.mph filter=lfs diff=lfs merge=lfs -text
-*.dat filter=lfs diff=lfs merge=lfs -text
-# *.hdf5 filter=lfs diff=lfs merge=lfs -text
-*.png filter=lfs diff=lfs merge=lfs -text
-*.pkl filter=lfs diff=lfs merge=lfs -text
-pdebench/**
+
+pinnacle_code/pdebench/**
 **.hdf5
 **.mph
 .log
