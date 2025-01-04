@@ -1,0 +1,19 @@
+# may also need: conda install -c nvidia cuda-nvcc
+numpy<2.0
+jax==0.4.7
+numpyro==0.11.0
+#flax==0.6.4  --no-deps
+jupyter
+matplotlib
+torch
+tqdm
+h5py
+matplotlib
+omegaconf
+jaxopt==0.6
+tensorboard
+orbax-checkpoint
+orbax-export
+jaxlib==0.4.7
+scikit-learn
+scipy==1.11.0
