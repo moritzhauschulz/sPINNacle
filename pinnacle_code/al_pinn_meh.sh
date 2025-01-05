@@ -22,6 +22,8 @@ echo "Current directory: $current_dir"
 pdes=(
     "--hidden_layers 8 --eqn conv-1d --use_pdebench --data_seed 40 --const 1.0 --train_steps 200000 --num_points 200 --mem_pts_total_budget 1000"
     "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 200000 --num_points 100 --mem_pts_total_budget 300"
+    "--hidden_layers 8 --eqn conv-1d --use_pdebench --data_seed 40 --const 1.0 --train_steps 1000 --num_points 200 --mem_pts_total_budget 1000"
+    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 10000 --num_points 100 --mem_pts_total_budget 300"
 )
 
 algs=(

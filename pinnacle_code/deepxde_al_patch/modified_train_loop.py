@@ -39,9 +39,17 @@ class ModifiedTrainLoop:
                  train_steps: int = 10000, al_every: int = 10000, snapshot_every: int = 1000,
                  select_anchors_every: int = 10000, anchor_budget: int = 0, mem_pts_total_budget: int = 1000,
                  anc_point_filter: Callable = None, anc_measurable_idx: int = None,
-                 loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False,
+                 loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False, 
+                 autoscale_first: bool = False, random_points_for_weights: bool = False,
                  ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
                  ):
+        #for recording gradient weight distribution
+        self.pde_grads_history = []
+        self.bc_grads_history = []
+
+        self.autoscale_first = autoscale_first
+        self.random_points_for_weights = random_points_for_weights
+
         self.model = model
         self.inverse_problem = inverse_problem
         self.log_dir = log_dir
@@ -697,6 +705,9 @@ class ModifiedTrainLoop:
             # don't do this bit of checking
             return False
         
+    def save_gradient_history(self, optimizer_name):
+        np.save(f'grads_{optimizer_name}_pde.npy', np.array(os.path.join(self.log_dir, self.pde_grads_history)))
+        np.save(f'grads_{optimizer_name}_bc.npy', np.array(os.path.join(self.log_dir, self.bc_grads_history)))
 
     def train(self, train_steps=None):
         
@@ -758,10 +769,32 @@ class ModifiedTrainLoop:
                         self._do_active_learning(do_anchor=do_anchor)
                         print(f'======= Done active learning =======')
                         solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+
+                #record pde grad
+                nn_params = self.net.params
+
+                def pde_loss(params, res):
+                    loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params,res) ** 2)
+                    return loss
+                        
+                def bc_loss(params, bcs):
+                    loss = 0
+                    for i in range(len(bcs)):
+                        loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], bcs[i]) ** 2)
+                    return loss
                     
+                # Collect PDE gradients
+                pde_grad = jax.grad(pde_loss)(params, self.current_samples['res'])
+                self.pde_grads_history.append(jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(pde_grad)]))
+
+                # Collect BC gradients
+                bc_grad = jax.grad(bc_loss)(params, self.current_samples['bcs'])
+                self.bc_grads_history.append(jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(bc_grad)]))
+                                    
                 # self.net.params = params[0]
                 # self.model.params = params
-                
+
+            self.save_gradient_history(self, self.optim_method, )
             end = time.time()
             print(f"Time required for last {self.al_every} steps = {end - start:.6f} seconds")
                                                 
