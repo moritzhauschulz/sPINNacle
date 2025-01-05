@@ -35,6 +35,8 @@ algs=(
     "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --autoscale_loss_w_bcs --random_points_for_weights --autoscale_first"
 )
 
+https://drive.google.com/file/d/17JSSDqv_hKt80BFyrToMVs_zj14VmuyO/view?usp=share_link
+
 losses=(
     "--loss_w_bcs 1.0"
 )

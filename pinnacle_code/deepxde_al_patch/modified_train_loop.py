@@ -25,6 +25,7 @@ from .icbc_patch import generate_residue, get_corresponding_y
 from .utils import to_cpu
 
 from .multiadam_jax import multiadam
+import gc
 
 
 from torch.utils.tensorboard import SummaryWriter
@@ -39,17 +40,18 @@ class ModifiedTrainLoop:
                  train_steps: int = 10000, al_every: int = 10000, snapshot_every: int = 1000,
                  select_anchors_every: int = 10000, anchor_budget: int = 0, mem_pts_total_budget: int = 1000,
                  anc_point_filter: Callable = None, anc_measurable_idx: int = None,
-                 loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False, 
-                 autoscale_first: bool = False, random_points_for_weights: bool = False,
-                 ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
+                 loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False, autoscale_first: bool = False,
+                 save_grads: bool = True, al_loss_weights: bool = False,
+                 random_points_for_weights: bool = False, ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
                  ):
         #for recording gradient weight distribution
-        self.pde_grads_history = []
-        self.bc_grads_history = []
+        self.pde_grads = None  # Changed to dict
+        self.bc_grads = None   # Changed to dict
 
         self.autoscale_first = autoscale_first
         self.random_points_for_weights = random_points_for_weights
 
+        self.save_grads = save_grads
         self.model = model
         self.inverse_problem = inverse_problem
         self.log_dir = log_dir
@@ -65,6 +67,9 @@ class ModifiedTrainLoop:
         self.mem_pts_total_budget = mem_pts_total_budget
         self.anc_point_filter = anc_point_filter
         self.anc_measurable_idx = anc_measurable_idx
+
+        self.autoscale_first = autoscale_first
+        self.random_points_for_weights = random_points_for_weights
         
         self.optim_method = optim_method
         self.optim_lr = optim_lr
@@ -73,6 +78,13 @@ class ModifiedTrainLoop:
         self.loss_w_bcs = loss_w_bcs if hasattr(loss_w_bcs, "__len__") else [loss_w_bcs for _ in self.data.bcs]
         self.loss_w_pde = loss_w_pde
         self.loss_w_anc = loss_w_anc
+
+        self.al_loss_weights = al_loss_weights
+        if self.al_loss_weights:
+            self.al_loss_w_bcs = loss_w_bcs
+            self.al_loss_w_pde = loss_w_pde
+            self.al_loss_w_anc = loss_w_anc
+
         self.autoscale_loss_w_bcs = autoscale_loss_w_bcs
         self.ntk_ratio_threshold = ntk_ratio_threshold
 
@@ -243,6 +255,8 @@ class ModifiedTrainLoop:
             print('loss_w_pde =', self.loss_w_pde)
             print('loss_w_bcs =', self.loss_w_bcs)
             print('loss_w_anc =', self.loss_w_anc)
+
+            del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, ntk_anc, eigvals_anc, tr_anc, total
         
         self._last_al_step = self.current_train_step
         
@@ -301,9 +315,9 @@ class ModifiedTrainLoop:
         self.al = AL_CONSTRUCTOR[self.point_selector_method](
             model=self.model,
             inverse_problem=self.inverse_problem,
-            loss_w_bcs=self.loss_w_bcs,
-            loss_w_pde=self.loss_w_pde,
-            loss_w_anc=self.loss_w_anc,
+            loss_w_bcs=self.al_loss_w_bcs if self.al_loss_weights else self.loss_w_bcs,
+            loss_w_pde=self.al_loss_w_pde if self.al_loss_weights else self.loss_w_pde,
+            loss_w_anc=self.loss_w_anc if self.al_loss_weights else self.loss_w_anc,
             optim_lr=self.optim_lr,
             current_samples=self.current_samples,
             mem_pts_total_budget=self.mem_pts_total_budget,
@@ -344,7 +358,7 @@ class ModifiedTrainLoop:
         # )
         
         # compute kernel
-        if self.autoscale_loss_w_bcs and self.autoscale_first:
+        if self.autoscale_loss_w_bcs and not self.autoscale_first:
             
             if self.random_points_for_weights:
                 d = self._get_random_samples()
@@ -371,6 +385,7 @@ class ModifiedTrainLoop:
                 print(f'Exp top eigvals = {eigvals_pde[-min(5, eigvals_anc.shape[0]):]}')
                 tr_anc = jnp.sum(eigvals_anc)
                 print(f'Exp trace = {tr_anc}')
+                del ntk_anc, ntk_anc
             else:
                 tr_anc = 0.
                 
@@ -382,6 +397,8 @@ class ModifiedTrainLoop:
             print('loss_w_pde =', self.loss_w_pde)
             print('loss_w_bcs =', self.loss_w_bcs)
             print('loss_w_anc =', self.loss_w_anc)
+
+            del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, tr_anc, total
         
         def new_loss(params):
             # Calculate loss
@@ -463,7 +480,12 @@ class ModifiedTrainLoop:
             'loss_w_bcs': self.loss_w_bcs,
             'loss_w_pde': self.loss_w_pde,
             'loss_w_anc': self.loss_w_anc,
+            'pde_grads': to_cpu(self.pde_grads),
+            'bc_grads': to_cpu(self.bc_grads),
         }
+
+        # Force garbage collection after recording
+        gc.collect()
 
         print(f'Step {self.loss_steps[-1]: 6d} : train_loss = {self.loss_train[-1]:.8f}, '
               f'test_res = {self.test_res[-1]:.8f}, test_err = {self.test_err[-1]:.8f}'
@@ -704,10 +726,48 @@ class ModifiedTrainLoop:
         else:
             # don't do this bit of checking
             return False
+    
+
+    def plot_gradient_distributions(self, writer=None):
+        """Plot gradient distributions for current timestep"""
+        print('plotting gradient distributions')
+        # Get current gradient values
+        curr_pde_grads = self.pde_grads.flatten()  # Changed indexing
+        curr_bc_grads = self.bc_grads.flatten()    # Changed indexing
         
-    def save_gradient_history(self, optimizer_name):
-        np.save(f'grads_{optimizer_name}_pde.npy', np.array(os.path.join(self.log_dir, self.pde_grads_history)))
-        np.save(f'grads_{optimizer_name}_bc.npy', np.array(os.path.join(self.log_dir, self.bc_grads_history)))
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        
+        # PDE gradients
+        ax1.hist(curr_pde_grads, 
+                 bins=200, 
+                 alpha=0.5, 
+                 density=True,
+                 color='blue')
+        
+        # BC gradients
+        ax2.hist(curr_bc_grads, 
+                 bins=200, 
+                 alpha=0.5, 
+                 density=True,
+                 color='blue')
+
+        ax1.set_title(f'PDE Loss Gradients (Step {self.current_train_step})')
+        ax2.set_title(f'BC Loss Gradients (Step {self.current_train_step})')
+        ax1.set_xlabel('Gradient Value')
+        ax2.set_xlabel('Gradient Value')
+        ax1.set_ylabel('Frequency')
+        ax2.set_ylabel('Frequency')
+        ax1.legend()
+        ax2.legend()
+        plt.tight_layout()
+        
+        if self.log_dir:
+            plt.savefig(os.path.join(self.log_dir, f'gradient_distributions_step_{self.current_train_step}.png'))
+        
+        if writer is not None:
+            writer.add_figure(f'Gradients/distributions_step_{self.current_train_step}', fig, global_step=self.current_train_step)
+        
+        plt.close()
 
     def train(self, train_steps=None):
         
@@ -734,7 +794,6 @@ class ModifiedTrainLoop:
             self._do_active_learning(do_anchor=do_anchor)
             print(f'======= Done active learning =======')
             self._record(writer=writer, al_step=True)
-        
         solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
         
         for r in range(al_rounds):     
@@ -748,6 +807,9 @@ class ModifiedTrainLoop:
                 
                 self.current_train_step += 1
 
+                # if self.current_train_step  % 50 == 0:
+                #     print(f'Current train step: {self.current_train_step}')
+
                 # l_, grad = self.loss_fn_grad(params)
                 # updates, opt_state = opt.update(grad, opt_state)
                 # params = optax.apply_updates(params, updates)
@@ -759,6 +821,7 @@ class ModifiedTrainLoop:
                 self.current_params = params
                 
                 if self.current_train_step % self.snapshot_every == 0:
+                    print(f'======= Step {self.current_train_step} - recording =======')
                     
                     self._record(writer=writer, al_step=(self.current_train_step % self.al_every == 0))
                     
@@ -770,34 +833,44 @@ class ModifiedTrainLoop:
                         print(f'======= Done active learning =======')
                         solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
 
-                #record pde grad
-                nn_params = self.net.params
-
-                def pde_loss(params, res):
-                    loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params,res) ** 2)
-                    return loss
-                        
-                def bc_loss(params, bcs):
-                    loss = 0
-                    for i in range(len(bcs)):
-                        loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], bcs[i]) ** 2)
-                    return loss
+                    def pde_loss(params, res):
+                        loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params,res) ** 2)
+                        return loss
+                            
+                    def bc_loss(params, bcs):
+                        loss = 0
+                        for i in range(len(bcs)):
+                            loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], bcs[i]) ** 2)
+                        return loss
                     
-                # Collect PDE gradients
-                pde_grad = jax.grad(pde_loss)(params, self.current_samples['res'])
-                self.pde_grads_history.append(jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(pde_grad)]))
+                    print(f'self.save_grads = {self.save_grads}')
+                    if self.save_grads and (self.current_train_step % self.al_every == 0):
+                        # Collect PDE gradients
+                        pde_grad = jax.grad(pde_loss)(params, self.current_samples['res'])
+                        self.pde_grads = jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(pde_grad)])  # Changed to dict
 
-                # Collect BC gradients
-                bc_grad = jax.grad(bc_loss)(params, self.current_samples['bcs'])
-                self.bc_grads_history.append(jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(bc_grad)]))
-                                    
+                        # Collect BC gradients
+                        bc_grad = jax.grad(bc_loss)(params, self.current_samples['bcs'])
+                        self.bc_grads = jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(bc_grad)])  # Changed to dict
+                        
+                        # Plot gradient distributions periodically
+                        self.plot_gradient_distributions(writer=writer)
+                        print('saved graident distribution at {self.current_train_step}')
+                        
+                        del pde_grad, bc_grad
+
+                    print(f'completed snapshot at step {self.current_train_step}')
+                
+                    # Clean up after each round
+                    gc.collect()
+                    jax.clear_caches()
+
                 # self.net.params = params[0]
                 # self.model.params = params
 
-            self.save_gradient_history(self, self.optim_method, )
-            end = time.time()
-            print(f"Time required for last {self.al_every} steps = {end - start:.6f} seconds")
-                                                
+        end = time.time()
+        print(f"Time required for last {self.al_every} steps = {end - start:.6f} seconds")
+                                            
         if writer is not None:
             writer.close()
         # Record plots to tensorboard
@@ -814,10 +887,6 @@ class ModifiedTrainLoop:
         #     writer.flush()
         #     writer.close()
 
-
-    
-
-        
     def solution_prediction(self, xs, step_idx=None):
         step_idx = list(self.snapshot_data.keys())[-1] if step_idx is None else step_idx
         params = self.snapshot_data[step_idx]['params'][0]
@@ -864,6 +933,5 @@ class ModifiedTrainLoop:
         # if fig is not None:
         #     plt.close(fig)
         return fig, ax
-    
 
-    
+

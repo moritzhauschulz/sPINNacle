@@ -79,9 +79,13 @@ parser.add_argument('--train_steps', type=int, default=50000)
 parser.add_argument('--al_every', type=int, default=5000)
 parser.add_argument('--select_anchors_every', type=int, default=5000)
 parser.add_argument('--loss_w_bcs', type=float, default=1.0)
+parser.add_argument('--al_loss_weights', action=argparse.BooleanOptionalAction, default=False) #use separate (fixed) weights for point selection
 parser.add_argument('--autoscale_loss_w_bcs', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--random_points_for_weights', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--autoscale_first', action=argparse.BooleanOptionalAction, default=False)
+
+parser.add_argument('--save_grads', action=argparse.BooleanOptionalAction, default=True)
+
 
 parser.add_argument('--auto_al', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--anchor_budget', type=int, default=0)
@@ -364,7 +368,7 @@ if optim == 'multiadam':
         purge_every = 50000
     else:
         steps = list(range(0, train_steps + 1, 5000))
-        purge_every = 10000
+        purge_every = 10000 #was 10000
 
 
 elif optim == 'adam':
