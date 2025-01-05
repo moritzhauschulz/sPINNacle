@@ -39,8 +39,8 @@ class ModifiedTrainLoop:
                  train_steps: int = 10000, al_every: int = 10000, snapshot_every: int = 1000,
                  select_anchors_every: int = 10000, anchor_budget: int = 0, mem_pts_total_budget: int = 1000,
                  anc_point_filter: Callable = None, anc_measurable_idx: int = None,
-                 loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False,
-                 ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
+                 loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False, autoscale_first: bool = False,
+                 random_points_for_weights: bool = False, ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
                  ):
         self.model = model
         self.inverse_problem = inverse_problem
@@ -57,6 +57,9 @@ class ModifiedTrainLoop:
         self.mem_pts_total_budget = mem_pts_total_budget
         self.anc_point_filter = anc_point_filter
         self.anc_measurable_idx = anc_measurable_idx
+
+        self.autoscale_first = autoscale_first
+        self.random_points_for_weights = random_points_for_weights
         
         self.optim_method = optim_method
         self.optim_lr = optim_lr
