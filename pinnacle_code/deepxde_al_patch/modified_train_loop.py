@@ -273,6 +273,7 @@ class ModifiedTrainLoop:
                 steps = 100
             print(f'Training for {steps} steps to get pseudo-values for anchor')
             
+            #MIGHT NEED CHANGING
             if self.loss_fn is None:
                 def _loss(params):
                     loss = jnp.mean(self.pde_residue_fn(params, self._ntk_check_pts['res']) ** 2)
@@ -281,13 +282,15 @@ class ModifiedTrainLoop:
                     return loss
                 self.loss_fn = _loss
                 self.loss_fn_grad = jax.value_and_grad(_loss) 
+                if self.optim_method == 'multiadam':
+                    raise NotImplementedError('Did not implement this case yet for the new multiadam')
                 print('Pseudo-training using new function')
                 print(f'Mock train set has {self._ntk_check_pts["res"].shape[0]} res pts. and {[bcs.shape[0] for bcs in self._ntk_check_pts["bcs"]]} ICBC pts.')
             else:
                 print('Pseudo-training using existing train function')
             
             # do GD a few more steps to get pseudo data
-            solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+            solver = self._generate_solver(value_and_grad=self.loss_fn_grad, aux_loss=[self.pde_loss_grad , self.bc_loss_grad])
             target_fn_param = self.model.params
             if self.opt_state is None:
                 opt_state = solver.init_state(target_fn_param)
@@ -400,19 +403,48 @@ class ModifiedTrainLoop:
 
             del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, tr_anc, total
         
-        def new_loss(params):
-            # Calculate loss
-            # TODO to add in the loss of the active learning samples and also include weights
-            loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
-            # Adjusting to use the new loss_w_bcs array
-            for i in range(len(self.current_samples['bcs'])):
-                loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
-            if 'anc' in self.current_samples.keys():
-                loss += self.loss_w_anc * jnp.mean(soln_train_loss(params[0], anc_x, anc_y) ** 2)
-            return loss
-        
-        self.loss_fn = jax.jit(new_loss)
-        self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
+        if not self.optim_method == 'multiadam':
+            def new_loss(params):
+            
+                # Calculate loss
+                # TODO to add in the loss of the active learning samples and also include weights
+                loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
+                # Adjusting to use the new loss_w_bcs array
+                for i in range(len(self.current_samples['bcs'])):
+                    loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
+                if 'anc' in self.current_samples.keys():
+                    loss += self.loss_w_anc * jnp.mean(soln_train_loss(params[0], anc_x, anc_y) ** 2)
+                return loss
+            self.loss_fn = jax.jit(new_loss)
+            self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
+            
+
+        else:
+            def new_pde_loss(params):
+                # Calculate losses separately
+                pde_loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
+                # Adjusting to use the new loss_w_bcs array
+                return pde_loss
+            def new_bc_loss(params):
+                bc_loss = 0
+                for i in range(len(self.current_samples['bcs'])):
+                    bc_loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
+                if 'anc' in self.current_samples.keys():
+                    raise NotImplementedError("Multiadam optimization with anchor points not implemented") 
+                return bc_loss
+            def new_loss(params):
+                # Calculate losses separately
+                pde_loss = new_pde_loss(params)
+                bc_loss = new_bc_loss(params)
+                loss = pde_loss + bc_loss
+                return loss #, {'pde_loss': pde_loss, 'bc_loss': bc_loss}
+            
+            self.loss_fn = jax.jit(new_loss)
+            self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
+            self.pde_loss_fn = jax.jit(new_pde_loss)
+            self.pde_loss_fn_grad = jax.value_and_grad(self.pde_loss_fn) 
+            self.bc_loss_fn = jax.jit(new_bc_loss)
+            self.bc_loss_fn_grad = jax.value_and_grad(self.bc_loss_fn) 
         
     def _generate_solver(self, value_and_grad):
         # # TODO to add in other optimizers like L-BFGS
@@ -828,7 +860,7 @@ class ModifiedTrainLoop:
             self._do_active_learning(do_anchor=do_anchor)
             print(f'======= Done active learning =======')
             self._record(writer=writer, al_step=True)
-        solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+        solver = self._generate_solver(value_and_grad=self.loss_fn_grad, aux_loss=[self.pde_loss_grad , self.bc_loss_grad])
         
         for r in range(al_rounds):     
             
@@ -891,7 +923,7 @@ class ModifiedTrainLoop:
                         print(f'======= Step {self.current_train_step} - performing active learning =======')
                         self._do_active_learning(do_anchor=do_anchor)
                         print(f'======= Done active learning =======')
-                        solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+                        solver = self._generate_solver(value_and_grad=self.loss_fn_grad, aux_loss=[self.pde_loss_grad , self.bc_loss_grad])
 
                     print(f'completed snapshot at step {self.current_train_step}')
 

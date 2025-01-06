@@ -25,6 +25,7 @@ def multiadam(
     agg_betas: Optional[tuple] = None,
     amsgrad: bool = False,
     maximize: bool = False,
+    aux_loss: list = None
 ) -> optax.GradientTransformation:
     """MultiAdam optimizer matching PyTorch implementation exactly."""
     
@@ -102,8 +103,10 @@ def multiadam(
         all_updates = []
         new_states = []
         for i in range(n_groups):
+            sub_loss_fn = aux_loss[i]
+            sub_grads = jax.grad(sub_loss_fn)(params)
             group_update, (new_exp_avg, new_exp_avg_sq, new_max_exp_avg_sq) = update_group(
-                updates, state.exp_avg[i], state.exp_avg_sq[i],
+                sub_grads, state.exp_avg[i], state.exp_avg_sq[i],
                 state.max_exp_avg_sq[i], group_weights[i])
             all_updates.append(group_update)
             new_states.append((new_exp_avg, new_exp_avg_sq, new_max_exp_avg_sq))
