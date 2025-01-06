@@ -21,7 +21,7 @@ def multiadam(
     weight_decay: float = 0.0,
     loss_group_idx: Optional[Sequence[int]] = None,
     group_weights: Optional[Sequence[float]] = None,
-    agg_momentum: bool = False,
+    agg_momentum: bool = True,
     agg_betas: Optional[tuple] = None,
     amsgrad: bool = False,
     maximize: bool = False,
