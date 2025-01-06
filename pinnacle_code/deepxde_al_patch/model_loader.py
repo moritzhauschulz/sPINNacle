@@ -44,13 +44,13 @@ def construct_model(pde_name, pde_const, use_pdebench=False, inverse_problem=Fal
                     num_domain=1000, num_boundary=1000, num_initial=5000, include_ic=True,
                     hidden_layers=2, hidden_dim=64, activation='tanh', initializer='Glorot uniform', 
                     arch=None, fourier_count=100, fourier_scale=1., 
-                    do_compile=True, compile_optim='adam', compile_lr=1e-3):
+                    do_compile=True, compile_optim='adam', compile_lr=1e-3, scaling=1.):
     
     data, ext_vars, data_aux = load_data(
         pde_name=pde_name, pde_const=pde_const, use_pdebench=use_pdebench, test_max_pts=test_max_pts,
         inverse_problem=inverse_problem, inverse_problem_guess=inverse_problem_guess,
         data_root=data_root, data_seed=data_seed, data_aux_info=data_aux_info,
-        num_domain=num_domain, num_boundary=num_boundary, num_initial=num_initial, include_ic=include_ic,
+        num_domain=num_domain, num_boundary=num_boundary, num_initial=num_initial, include_ic=include_ic, scaling=scaling
     )
     
     input_dim = data.test_x.shape[1]

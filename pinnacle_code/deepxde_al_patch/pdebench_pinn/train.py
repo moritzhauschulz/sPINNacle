@@ -206,6 +206,7 @@ def _boundary_r(x, on_boundary, xL, xR):
     return (on_boundary and jnp.isclose(x[0], xL)) or (on_boundary and jnp.isclose(x[0], xR))
 
 def setup_pde1D(filename="1D_Advection_Sols_beta0.1.hdf5",
+                scaling=1.,
                 root_path='data',
                 val_batch_idx=0,
                 input_ch=2,
@@ -221,7 +222,7 @@ def setup_pde1D(filename="1D_Advection_Sols_beta0.1.hdf5",
                 num_initial=5000):
 
     # TODO: read from dataset config file
-    geom = dde.geometry.Interval(xL, xR)
+    geom = dde.geometry.Interval(xL*scaling, xR*scaling)
     boundary_r = lambda x, on_boundary: _boundary_r(x, on_boundary, xL, xR)
     
     if 'ReacDiff' in filename:

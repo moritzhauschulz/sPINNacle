@@ -86,6 +86,8 @@ parser.add_argument('--autoscale_first', action=argparse.BooleanOptionalAction, 
 
 parser.add_argument('--save_grads', action=argparse.BooleanOptionalAction, default=True)
 
+parser.add_argument('--scaling', type=float, default=1.)
+
 
 parser.add_argument('--auto_al', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--anchor_budget', type=int, default=0)
@@ -116,6 +118,8 @@ print(args)
 
 PDEBENCH_DATA = os.path.expanduser(args.pdebench_dir)
 RESULTS_FOLDER = os.path.expanduser(args.results_dir)
+
+scaling = args.scaling
 
 eqn = args.eqn
 const = args.const
@@ -263,6 +267,7 @@ model, model_aux = construct_model(
     test_max_pts=250000,
     include_ic=allow_ic,
     data_root=PDEBENCH_DATA,
+    scaling=scaling,
     
     # model params
     hidden_layers=hidden_layers, 

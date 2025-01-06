@@ -13,7 +13,7 @@ def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
               inverse_problem=False, inverse_problem_guess=None,
               data_root='.', data_seed=0, data_aux_info=None,
               num_domain=1000, num_boundary=1000, num_initial=5000, include_ic=True,
-              test_max_pts=400000):
+              test_max_pts=400000, scaling=1.):
     """
     Arguments
         - pde_name
@@ -67,6 +67,7 @@ def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
         elif pde_name == 'burgers-1d':
             nu = pde_const[0]
             data, ext_vars, dataset = setup_pde1D(
+                scaling=scaling,
                 root_path=data_root,
                 filename=f'1D/Burgers/Train/1D_Burgers_Sols_Nu{nu}.hdf5',
                 aux_params=pde_const,

@@ -45,8 +45,8 @@ class ModifiedTrainLoop:
                  random_points_for_weights: bool = False, ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
                  ):
         #for recording gradient weight distribution
-        self.pde_grads = None  # Changed to dict
-        self.bc_grads = None   # Changed to dict
+        # self.pde_grads = None  # Changed to dict
+        # self.bc_grads = None   # Changed to dict
 
         self.autoscale_first = autoscale_first
         self.random_points_for_weights = random_points_for_weights
@@ -479,9 +479,7 @@ class ModifiedTrainLoop:
             'K_check_pts': to_cpu(K_check_pts),
             'loss_w_bcs': self.loss_w_bcs,
             'loss_w_pde': self.loss_w_pde,
-            'loss_w_anc': self.loss_w_anc,
-            'pde_grads': to_cpu(self.pde_grads),
-            'bc_grads': to_cpu(self.bc_grads),
+            'loss_w_anc': self.loss_w_anc
         }
 
         # Force garbage collection after recording
@@ -668,6 +666,20 @@ class ModifiedTrainLoop:
                 writer.add_scalar('Weights/loss_w_pde', float(self.loss_w_pde), self.current_train_step)
                 writer.add_scalar('Weights/loss_w_anc', float(self.loss_w_anc), self.current_train_step)
 
+            # Add gradient histograms
+            if hasattr(self, 'pde_grads'):
+                writer.add_histogram(
+                    'Gradients/pde_grads',
+                    np.array(self.pde_grads.flatten()),
+                    self.current_train_step
+                )
+            if hasattr(self, 'bc_grads'):
+                writer.add_histogram(
+                    'Gradients/bc_grads',
+                    np.array(self.bc_grads.flatten()),
+                    self.current_train_step
+                )
+
             # Choice of points
             writer.add_scalar('Points/num_res', self._sample_intermediates['chosen_pts']['res'].shape[0], self.current_train_step)
             for i in range(len(self._sample_intermediates['chosen_pts']['bcs'])):
@@ -823,16 +835,6 @@ class ModifiedTrainLoop:
                 if self.current_train_step % self.snapshot_every == 0:
                     print(f'======= Step {self.current_train_step} - recording =======')
                     
-                    self._record(writer=writer, al_step=(self.current_train_step % self.al_every == 0))
-                    
-                    # either last iteration of round (have to do AL), or trigger to redo AL from NTK value
-                    if (r_inside == self.al_every - 1) or self.need_to_redo_active_learning(writer=writer):
-                        do_anchor = self.select_anchors and (self.current_train_step % self.select_anchors_every == 0)
-                        print(f'======= Step {self.current_train_step} - performing active learning =======')
-                        self._do_active_learning(do_anchor=do_anchor)
-                        print(f'======= Done active learning =======')
-                        solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
-
                     def pde_loss(params, res):
                         loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params,res) ** 2)
                         return loss
@@ -844,7 +846,7 @@ class ModifiedTrainLoop:
                         return loss
                     
                     print(f'self.save_grads = {self.save_grads}')
-                    if self.save_grads and (self.current_train_step % self.al_every == 0):
+                    if self.save_grads:
                         # Collect PDE gradients
                         pde_grad = jax.grad(pde_loss)(params, self.current_samples['res'])
                         self.pde_grads = jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(pde_grad)])  # Changed to dict
@@ -854,13 +856,23 @@ class ModifiedTrainLoop:
                         self.bc_grads = jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(bc_grad)])  # Changed to dict
                         
                         # Plot gradient distributions periodically
-                        self.plot_gradient_distributions(writer=writer)
-                        print('saved graident distribution at {self.current_train_step}')
+                        #self.plot_gradient_distributions(writer=writer)
+                        #print('saved graident distribution at {self.current_train_step}')
                         
                         del pde_grad, bc_grad
 
+                    self._record(writer=writer, al_step=(self.current_train_step % self.al_every == 0))
+                    
+                    # either last iteration of round (have to do AL), or trigger to redo AL from NTK value
+                    if (r_inside == self.al_every - 1) or self.need_to_redo_active_learning(writer=writer):
+                        do_anchor = self.select_anchors and (self.current_train_step % self.select_anchors_every == 0)
+                        print(f'======= Step {self.current_train_step} - performing active learning =======')
+                        self._do_active_learning(do_anchor=do_anchor)
+                        print(f'======= Done active learning =======')
+                        solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+
                     print(f'completed snapshot at step {self.current_train_step}')
-                
+
                     # Clean up after each round
                     gc.collect()
                     jax.clear_caches()
