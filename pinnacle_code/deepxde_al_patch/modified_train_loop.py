@@ -218,7 +218,7 @@ class ModifiedTrainLoop:
     def _do_active_learning(self, do_anchor: bool = False):
 
         if self.autoscale_loss_w_bcs and self.autoscale_first:
-            
+            print('autoscaling')
             if self.random_points_for_weights:
                 d = self._get_random_samples()
             else:
@@ -359,7 +359,7 @@ class ModifiedTrainLoop:
         
         # compute kernel
         if self.autoscale_loss_w_bcs and not self.autoscale_first:
-            
+            print('autoscaling')
             if self.random_points_for_weights:
                 d = self._get_random_samples()
             else:
@@ -442,6 +442,11 @@ class ModifiedTrainLoop:
         return solver
         
     def _record(self, writer: SummaryWriter = None, al_step = False):
+
+        if not self.point_selector_method.startswith('eig'):
+            skip = True
+        else:
+            skip = False
         
         params = self.current_params
         self.loss_steps.append(self.current_train_step)
@@ -458,15 +463,8 @@ class ModifiedTrainLoop:
         self.test_err.append(jnp.nanmean(soln_err_list ** 2))
         
         # Compute separate jacs
-        d = self._ntk_check_pts
-        jac_pde = self._ntk_fn.get_jac(d['res'], code=-1)
-        jac_bcs_list = [self._ntk_fn.get_jac(d['bcs'][i], code=i) for i in range(len(d['bcs']))] # separate eigvals for each bc component
-        jac_anc = self._ntk_fn.get_jac(d['anc'], code=-2)
-        jacs_sep = [jac_pde] + jac_bcs_list + [jac_anc]
-        jacs = {k: jnp.concatenate([jc[k] for jc in jacs_sep], axis=0) for k in jac_pde.keys()}
-        K_check_pts = self._ntk_fn.get_ntk(jac1=jacs, jac2=jacs)
-            
-        self.snapshot_data[self.current_train_step] = {
+        if skip:
+            self.snapshot_data[self.current_train_step] = {
             'al_intermediate': self._sample_intermediates if al_step else None,
             'samples': to_cpu(self.current_samples),
             'params': to_cpu(self.current_params),
@@ -476,11 +474,34 @@ class ModifiedTrainLoop:
             'pred_test': to_cpu(test_pred_list),
             'residue_test': to_cpu(test_res_list),
             'error_test': to_cpu(soln_err_list),
-            'K_check_pts': to_cpu(K_check_pts),
             'loss_w_bcs': self.loss_w_bcs,
             'loss_w_pde': self.loss_w_pde,
             'loss_w_anc': self.loss_w_anc
-        }
+            }   
+        else:
+            d = self._ntk_check_pts
+            jac_pde = self._ntk_fn.get_jac(d['res'], code=-1)
+            jac_bcs_list = [self._ntk_fn.get_jac(d['bcs'][i], code=i) for i in range(len(d['bcs']))] # separate eigvals for each bc component
+            jac_anc = self._ntk_fn.get_jac(d['anc'], code=-2)
+            jacs_sep = [jac_pde] + jac_bcs_list + [jac_anc]
+            jacs = {k: jnp.concatenate([jc[k] for jc in jacs_sep], axis=0) for k in jac_pde.keys()}
+            K_check_pts = self._ntk_fn.get_ntk(jac1=jacs, jac2=jacs)
+                
+            self.snapshot_data[self.current_train_step] = {
+                'al_intermediate': self._sample_intermediates if al_step else None,
+                'samples': to_cpu(self.current_samples),
+                'params': to_cpu(self.current_params),
+                'loss_train': to_cpu(self.loss_train[-1]),
+                'residue_test_mean': to_cpu(self.test_res[-1]),
+                'error_test_mean': to_cpu(self.test_err[-1]),
+                'pred_test': to_cpu(test_pred_list),
+                'residue_test': to_cpu(test_res_list),
+                'error_test': to_cpu(soln_err_list),
+                'K_check_pts': to_cpu(K_check_pts),
+                'loss_w_bcs': self.loss_w_bcs,
+                'loss_w_pde': self.loss_w_pde,
+                'loss_w_anc': self.loss_w_anc
+            }
 
         # Force garbage collection after recording
         gc.collect()
@@ -492,81 +513,82 @@ class ModifiedTrainLoop:
         # -------- Plotting functions for tensorboard ----------
         # Eigenbasis plots differentiating between residual and predict
 
-        def func_kernel_pred(train_loop,x_test,step_idx,idx=-1,code = -2, use_const_res=True):
-            
-            jacs_x_test = self._ntk_fn.get_jac(x_test, code=code)
-            # jacs_train = self._ntk_fn.get_jac(train_loop._sample_intermediates['old_points'])
-            jacs_train = train_loop._sample_intermediates['jac_train']
-            K_train_x_test = self._ntk_fn.get_ntk(jac1=jacs_train, jac2=jacs_x_test)
+        if not skip:
+            def func_kernel_pred(train_loop,x_test,step_idx,idx=-1,code = -2, use_const_res=True):
+                
+                jacs_x_test = self._ntk_fn.get_jac(x_test, code=code)
+                # jacs_train = self._ntk_fn.get_jac(train_loop._sample_intermediates['old_points'])
+                jacs_train = train_loop._sample_intermediates['jac_train']
+                K_train_x_test = self._ntk_fn.get_ntk(jac1=jacs_train, jac2=jacs_x_test)
 
-            # K_train_x_test = train_loop._sample_intermediates['K_train_test']
-            eigvects = train_loop._sample_intermediates['eigvects']
-            eigvals = train_loop._sample_intermediates['eigvals']
-            residual_old = train_loop._sample_intermediates['residual_old']
-            
-            # # Selecting specific eigenvectors
-            if use_const_res == True:
-                # output1 = jnp.ones(residual_old.shape) @eigvects[:,idx]
-                # Correct approach is to not use use residuals. 
-                output1 = 1
+                # K_train_x_test = train_loop._sample_intermediates['K_train_test']
+                eigvects = train_loop._sample_intermediates['eigvects']
+                eigvals = train_loop._sample_intermediates['eigvals']
+                residual_old = train_loop._sample_intermediates['residual_old']
+                
+                # # Selecting specific eigenvectors
+                if use_const_res == True:
+                    # output1 = jnp.ones(residual_old.shape) @eigvects[:,idx]
+                    # Correct approach is to not use use residuals. 
+                    output1 = 1
+                else:
+                    output1 = residual_old@eigvects[:,idx]
+                output = output1 * 1/eigvals[idx]* eigvects[:,idx].T @ K_train_x_test
+                return output
+
+            def plot_eigenbasis(train_loop,step_idx=0, num_plots=10, plots_per_level = 5, use_const_res=True):
+                # Plotting eigenbasis
+
+                # Plotting grid settings
+                res = 30
+                xs = train_loop.x_test
+                xi, yi = [np.linspace(np.min(xs[:,i]), np.max(xs[:,i]), res) for i in range(2)]
+                grid = np.meshgrid(xi, yi)
+                pool_pts = jnp.array(grid).reshape(2, -1).T
+                x_test = pool_pts
+
+                fig, axs = plt.subplots(2, plots_per_level, figsize=(30, 15))
+                for i in range(plots_per_level):
+                    idx = -1-i
+                    # First level is for predict, second is for residual
+                    x_train = train_loop.snapshot_data[step_idx]['samples']
+
+                    samples = x_train
+                    for level in range(2):
+                        axs[level,i%plots_per_level].plot(samples['res'][:, 0], samples['res'][:, 1], 'o')
+                        for bc_pts in samples['bcs']:
+                            axs[level,i%plots_per_level].plot(bc_pts[:, 0], bc_pts[:, 1], '^')
+                        if level == 0:
+                            axs[level,i% plots_per_level].set_title(f'Top {-idx} Eigenvector for predict, step {step_idx}, Eigval = {train_loop.snapshot_data[step_idx]["al_intermediate"]["eigvals"][idx]:.2f}', wrap = True)
+                            T = func_kernel_pred(train_loop,x_test = x_test,step_idx=step_idx, idx=-idx, use_const_res=use_const_res, code = -2).reshape(res, res)
+                        else:
+                            axs[level,i% plots_per_level].set_title(f'Top {-idx} Eigenvector for residual, step {step_idx}, Eigval = {train_loop.snapshot_data[step_idx]["al_intermediate"]["eigvals"][idx]:.2f}', wrap=True)
+                            T = func_kernel_pred(train_loop,x_test = x_test,step_idx=step_idx, idx=-idx, use_const_res=use_const_res, code = -1).reshape(res, res)
+
+                        cb = axs[level,i%plots_per_level].pcolormesh(*grid, T, cmap='RdBu_r')
+
+                        fig.colorbar(cb, ax=axs[level,i%plots_per_level])
+                return fig
+        
+            def gen_eigenbasis(step_idx=0, eigval_count=10):
+                res = 30
+                xs = self.x_test
+                xi, yi = [np.linspace(np.min(xs[:,i]), np.max(xs[:,i]), res) for i in range(2)]
+                grid = np.meshgrid(xi, yi)
+                pool_pts = jnp.array(grid).reshape(2, -1).T
+                pred_eigvects = [func_kernel_pred(self, x_test=pool_pts, step_idx=step_idx, idx=i, use_const_res=True, code=-2).reshape(res, res)
+                                for i in range(eigval_count)]
+                res_eigvects = [func_kernel_pred(self, x_test=pool_pts, step_idx=step_idx, idx=i, use_const_res=True, code=-1).reshape(res, res)
+                                for i in range(eigval_count)]
+                return pool_pts, pred_eigvects, res_eigvects
+        
+            if al_step and ('jac_train' in self._sample_intermediates.keys()) and (self.data.test_x.shape[1] == 2):
+                pool_pts, pred_eigvects, res_eigvects = gen_eigenbasis(step_idx=self.current_train_step)
             else:
-                output1 = residual_old@eigvects[:,idx]
-            output = output1 * 1/eigvals[idx]* eigvects[:,idx].T @ K_train_x_test
-            return output
-
-        def plot_eigenbasis(train_loop,step_idx=0, num_plots=10, plots_per_level = 5, use_const_res=True):
-            # Plotting eigenbasis
-
-            # Plotting grid settings
-            res = 30
-            xs = train_loop.x_test
-            xi, yi = [np.linspace(np.min(xs[:,i]), np.max(xs[:,i]), res) for i in range(2)]
-            grid = np.meshgrid(xi, yi)
-            pool_pts = jnp.array(grid).reshape(2, -1).T
-            x_test = pool_pts
-
-            fig, axs = plt.subplots(2, plots_per_level, figsize=(30, 15))
-            for i in range(plots_per_level):
-                idx = -1-i
-                # First level is for predict, second is for residual
-                x_train = train_loop.snapshot_data[step_idx]['samples']
-
-                samples = x_train
-                for level in range(2):
-                    axs[level,i%plots_per_level].plot(samples['res'][:, 0], samples['res'][:, 1], 'o')
-                    for bc_pts in samples['bcs']:
-                        axs[level,i%plots_per_level].plot(bc_pts[:, 0], bc_pts[:, 1], '^')
-                    if level == 0:
-                        axs[level,i% plots_per_level].set_title(f'Top {-idx} Eigenvector for predict, step {step_idx}, Eigval = {train_loop.snapshot_data[step_idx]["al_intermediate"]["eigvals"][idx]:.2f}', wrap = True)
-                        T = func_kernel_pred(train_loop,x_test = x_test,step_idx=step_idx, idx=-idx, use_const_res=use_const_res, code = -2).reshape(res, res)
-                    else:
-                        axs[level,i% plots_per_level].set_title(f'Top {-idx} Eigenvector for residual, step {step_idx}, Eigval = {train_loop.snapshot_data[step_idx]["al_intermediate"]["eigvals"][idx]:.2f}', wrap=True)
-                        T = func_kernel_pred(train_loop,x_test = x_test,step_idx=step_idx, idx=-idx, use_const_res=use_const_res, code = -1).reshape(res, res)
-
-                    cb = axs[level,i%plots_per_level].pcolormesh(*grid, T, cmap='RdBu_r')
-
-                    fig.colorbar(cb, ax=axs[level,i%plots_per_level])
-            return fig
-        
-        def gen_eigenbasis(step_idx=0, eigval_count=10):
-            res = 30
-            xs = self.x_test
-            xi, yi = [np.linspace(np.min(xs[:,i]), np.max(xs[:,i]), res) for i in range(2)]
-            grid = np.meshgrid(xi, yi)
-            pool_pts = jnp.array(grid).reshape(2, -1).T
-            pred_eigvects = [func_kernel_pred(self, x_test=pool_pts, step_idx=step_idx, idx=i, use_const_res=True, code=-2).reshape(res, res)
-                             for i in range(eigval_count)]
-            res_eigvects = [func_kernel_pred(self, x_test=pool_pts, step_idx=step_idx, idx=i, use_const_res=True, code=-1).reshape(res, res)
-                            for i in range(eigval_count)]
-            return pool_pts, pred_eigvects, res_eigvects
-        
-        if al_step and ('jac_train' in self._sample_intermediates.keys()) and (self.data.test_x.shape[1] == 2):
-            pool_pts, pred_eigvects, res_eigvects = gen_eigenbasis(step_idx=self.current_train_step)
-        else:
-            pool_pts, pred_eigvects, res_eigvects = None, None, None
-        self.snapshot_data[self.current_train_step]['eig_pool_pts'] = to_cpu(pool_pts)
-        self.snapshot_data[self.current_train_step]['pred_eigvects'] = to_cpu(pred_eigvects)
-        self.snapshot_data[self.current_train_step]['res_eigvects'] = to_cpu(res_eigvects)
+                pool_pts, pred_eigvects, res_eigvects = None, None, None
+            self.snapshot_data[self.current_train_step]['eig_pool_pts'] = to_cpu(pool_pts)
+            self.snapshot_data[self.current_train_step]['pred_eigvects'] = to_cpu(pred_eigvects)
+            self.snapshot_data[self.current_train_step]['res_eigvects'] = to_cpu(res_eigvects)
 
         def _plot_grid_timesteps(step_idxs, xs, zs_arrs, train_loop, res=100, plot_training_data=True):
             xi, yi = [np.linspace(np.min(xs[:,i]), np.max(xs[:,i]), res) for i in range(2)]
@@ -590,7 +612,6 @@ class ModifiedTrainLoop:
                 
             fig.colorbar(cb, ax=list(axs))
             return fig
-
 
         def plot_residue_loss(train_loop, step_idxs, res=100, plot_training_data=True):
             zs_arrs = [np.abs(train_loop.pde_residue(xs=train_loop.x_test, step_idx=s)) for s in step_idxs]
@@ -693,8 +714,9 @@ class ModifiedTrainLoop:
             if 'scale' in self.current_params[0]['params']:
                 writer.add_scalar('Params/GAAF_scale', np.array(self.current_params[0]['params']['scale']), self.current_train_step)
             # a-value
-            writer.add_scalar('Coef_eigvects/new_pts', np.array(self._sample_intermediates['label_info_new_pts']['a_norm']), self.current_train_step)
-            writer.add_scalar('Coef_eigvects/returned_pts', np.array(self._sample_intermediates['label_info_returned_pts']['a_norm']), self.current_train_step)
+            if not skip:
+                writer.add_scalar('Coef_eigvects/new_pts', np.array(self._sample_intermediates['label_info_new_pts']['a_norm']), self.current_train_step)
+                writer.add_scalar('Coef_eigvects/returned_pts', np.array(self._sample_intermediates['label_info_returned_pts']['a_norm']), self.current_train_step)
 
 
             if self.tensorboard_plots and al_step:
@@ -704,7 +726,7 @@ class ModifiedTrainLoop:
                 res_error_plot = plot_residue_loss(self,step_idxs = [self.current_train_step])
                 writer.add_figure('res_error_plots', res_error_plot, global_step=self.current_train_step)
 
-                if ('jac_train' in self._sample_intermediates.keys()) and ('eigvals' in self._sample_intermediates.keys()) and (self.data.test_x.shape[1] == 2):
+                if not skip and ('jac_train' in self._sample_intermediates.keys()) and ('eigvals' in self._sample_intermediates.keys()) and (self.data.test_x.shape[1] == 2):
                     
                     eigbasis_plots = plot_eigenbasis(self,step_idx = self.current_train_step,plots_per_level=5, use_const_res = True)
                     writer.add_figure('eigbasis_plots', eigbasis_plots, global_step=self.current_train_step)

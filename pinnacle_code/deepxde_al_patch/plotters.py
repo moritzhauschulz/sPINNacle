@@ -125,6 +125,84 @@ def plot_prediction(train_loop, step_idxs=None, res=100, out_idx=0, plot_trainin
     fig.colorbar(cb, ax=axs)
     return fig
 
+def plot_multiple_predictions(train_loops, train_loop_labels=None, step_idxs=None, res=100, out_idx=0, plot_training_data=True, t_plot=None):
+    """
+    Plots predictions for multiple train loops.
+    
+    Args:
+        train_loops (list): List of train_loop objects.
+        step_idxs (list): List of step indices to plot for each train_loop.
+        res (int): Resolution of the grid for contour plotting.
+        out_idx (int): Index of the output to plot.
+        plot_training_data (bool): Whether to plot training data.
+        t_plot (float): Time slice for 3D data.
+
+    Returns:
+        matplotlib.figure.Figure: The resulting figure with all subplots.
+    """
+    if step_idxs is None:
+        step_idxs = []
+
+    has_step_idxs = len(step_idxs) > 0
+
+    in_dim = train_loops[0].x_test.shape[1]
+    if in_dim > 3:
+        raise ValueError('in_dim > 3 is not supported.')
+
+    # Prepare the grid and triangulation from the first train loop
+    xs = train_loops[0].x_test
+    if in_dim == 3:
+        assert t_plot is not None, "t_plot must be provided for 3D data."
+        idxs = (xs[:, 2] == t_plot)
+        xs = xs[idxs, :]
+        assert xs.shape[0] > 0, "No data points found for the specified time slice."
+
+    xi, yi = [np.linspace(np.min(xs[:, i]), np.max(xs[:, i]), res) for i in range(2)]
+    triang = tri.Triangulation(xs[:, 0], xs[:, 1])
+
+    # Initialize the figure and axes
+    num_train_loops = len(train_loops)
+    num_cols = num_train_loops + (1 if has_step_idxs else 0)  # True solution + each train_loop + optional legend
+    fig, axs = plt.subplots(nrows=1, ncols=num_cols, figsize=(plt.rcParams['figure.figsize'][0] * (num_cols + 1.25), plt.rcParams['figure.figsize'][0]))
+
+    # Compute z_actual from the first train loop
+    z_actual = train_loops[0].y_test[:, out_idx].flatten() if in_dim <= 2 else train_loops[0].y_test[idxs, out_idx].flatten()
+
+    # Compute shared levels for contour plots
+    zs_arrs = []
+    for train_loop in train_loops:
+        zs = train_loop.solution_prediction(xs, step_idx=step_idxs[0])[:, out_idx].flatten() if has_step_idxs else None
+        if zs is not None:
+            zs_arrs.append(zs)
+
+    levels = np.linspace(np.min([z_actual] + zs_arrs), np.max([z_actual] + zs_arrs), num=2 * res)
+
+    # Plot true solution
+    interpolator = tri.LinearTriInterpolator(triang, z_actual)
+    Xi, Yi = np.meshgrid(xi, yi)
+    zi = interpolator(Xi, Yi)
+    cb = axs[-1].contourf(xi, yi, zi, levels=levels, cmap="RdBu_r")
+    axs[-1].set_title('True Solution')
+
+    # Plot each train_loop's prediction
+    for i, train_loop in enumerate(train_loops):
+        zs = train_loop.solution_prediction(xs, step_idx=step_idxs[0])[:, out_idx].flatten() if has_step_idxs else None
+        if zs is not None:
+            interpolator = tri.LinearTriInterpolator(triang, zs)
+            zi = interpolator(Xi, Yi)
+            axs[i].contourf(xi, yi, zi, levels=levels, cmap="RdBu_r")
+            axs[i].set_title(f'{i + 1 if train_loop_labels is None else train_loop_labels[i]}, Step {step_idxs[0]}')
+
+            if plot_training_data and in_dim == 2:
+                train_loop.plot_training_data(step_idx=step_idxs[0], ax=axs[i])
+
+
+    # Add a colorbar to the last column
+    fig.colorbar(cb, ax=axs[-1])
+
+    plt.tight_layout()
+    return fig
+
 # Plot eigenvalues
 def plot_eigvals(train_loop,step_idx):
     fig = plt.plot(jnp.log10(train_loop.snapshot_data[step_idx]['al_intermediate']['eigvals']))

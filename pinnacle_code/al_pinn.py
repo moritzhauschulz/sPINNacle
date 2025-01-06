@@ -83,6 +83,7 @@ parser.add_argument('--al_loss_weights', action=argparse.BooleanOptionalAction, 
 parser.add_argument('--autoscale_loss_w_bcs', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--random_points_for_weights', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--autoscale_first', action=argparse.BooleanOptionalAction, default=False)
+parser.add_argument('--pickle_trainloop', action=argparse.BooleanOptionalAction, default=True)
 
 parser.add_argument('--save_grads', action=argparse.BooleanOptionalAction, default=True)
 
@@ -424,11 +425,9 @@ else:
 
 """ TRAIN SETUP """
 
-if point_selector_method.startswith('eig'):
-    tensorboard_dir = f'{folder_name}/tensorboard'
-    os.makedirs(tensorboard_dir, exist_ok=True)
-else:
-    tensorboard_dir = None
+# if point_selector_method.startswith('eig'):
+tensorboard_dir = f'{folder_name}/tensorboard'
+os.makedirs(tensorboard_dir, exist_ok=True)
 
 train_loop = ModifiedTrainLoop(
     model=model, 
@@ -517,3 +516,4 @@ for d in range(model.data.test_y.shape[1]):
         savefig(f'pred/step{i}{dim_str}.png', plot_prediction(train_loop=train_loop, step_idxs=[i], out_idx=d, plot_training_data=False))
 #         savefig(f'error/step{i}{dim_str}.png', plot_error(train_loop=train_loop, step_idxs=[i], out_idx=d, plot_training_data=False))
 #         savefig(f'residue/step{i}{dim_str}.png', plot_residue_loss(train_loop=train_loop, step_idxs=[i], plot_training_data=False))
+

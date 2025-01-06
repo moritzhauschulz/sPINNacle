@@ -220,9 +220,14 @@ def setup_pde1D(filename="1D_Advection_Sols_beta0.1.hdf5",
                 num_domain=1000,
                 num_boundary=1000,
                 num_initial=5000):
+    
+    if scaling != 1.:
+        print(f'WARNING: Scaling domain by {scaling}')
 
     # TODO: read from dataset config file
-    geom = dde.geometry.Interval(xL*scaling, xR*scaling)
+    xL = xL * scaling
+    xR = xR * scaling
+    geom = dde.geometry.Interval(xL, xR)
     boundary_r = lambda x, on_boundary: _boundary_r(x, on_boundary, xL, xR)
     
     if 'ReacDiff' in filename:
@@ -239,7 +244,7 @@ def setup_pde1D(filename="1D_Advection_Sols_beta0.1.hdf5",
         
     elif 'Burgers' in filename:
         # timedomain = dde.geometry.TimeDomain(0, 2.0)
-        timedomain = dde.geometry.TimeDomain(0, 2.0)
+        timedomain = dde.geometry.TimeDomain(0, 2.0 * scaling)
         _pde = pde_burgers1D
         if_periodic_bc = True
         
@@ -266,6 +271,7 @@ def setup_pde1D(filename="1D_Advection_Sols_beta0.1.hdf5",
     
     # prepare initial condition
     initial_input, initial_u = dataset.get_initial_condition()
+    initial_input = initial_input * scaling
     
     if 'CFD' in filename:
         ic_data_d = dde.icbc.PointSetBC(initial_input.cpu(), initial_u[:,0].unsqueeze(1), component=0)
@@ -318,6 +324,14 @@ def setup_pde1D(filename="1D_Advection_Sols_beta0.1.hdf5",
         
     data.test_x = jnp.array(dataset.data_input)
     data.test_y = jnp.array(dataset.data_output)
+
+    # Scale spatial domain (column 0)
+    data.test_x = data.test_x.at[:,0].set(scaling * data.test_x[:,0])
+    data.test_x = data.test_x.at[:,1].set(scaling * data.test_x[:,1])
+    # data.train_x = data.train_x.at[:,0].set(scaling * data.train_x[:,0])
+    # data.ic_input = data.ic_input.at[:,0].set(scaling * data.ic_input[:,0])
+    # data.bc_input = data.bc_input.at[:,0].set(scaling * data.bc_input[:,0])
+    
     
     # correct a mistake in some 1d examples
     # if ('Advection' in filename):  # or ('Burgers' in filename):
