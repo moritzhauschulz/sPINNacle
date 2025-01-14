@@ -138,3 +138,5 @@ pinnacle_code/pdebench/**
 .new_venv/**
 pinnacle_code/plots_meh/**
 pinnacle_code/al_pinn_results/*
+al_pinn_results/*
+pinnacle_code/old_al_pinn_results/*

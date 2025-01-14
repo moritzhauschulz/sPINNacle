@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python Debugger: Current File with Arguments",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": ["--hidden_layers", "4", "--eqn", "poisson-2d", "--const", "0.02", "--data_seed", "20","--train_steps", "10000", "--num_points", "100", "--mem_pts_total_budget", "300", "--method", "random", "--sample_each_round", "--loss_w_bcs", "1.0"
+            ]
+        }
+    ]
+}
