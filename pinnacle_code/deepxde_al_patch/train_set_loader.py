@@ -4,6 +4,9 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from functools import reduce
+
+
 from . import deepxde as dde
 
 from .pdebench_pinn.train import *
@@ -11,7 +14,7 @@ from .pdebench_pinn.train import *
 
 def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
               inverse_problem=False, inverse_problem_guess=None,
-              data_root='.', data_seed=0, data_aux_info=None,
+              data_root='/Users/moritzhauschulz/oxford_code/tdl/pinnacle_2024/pinnacle_code/pdebench', data_seed=0, data_aux_info=None,
               num_domain=1000, num_boundary=1000, num_initial=5000, include_ic=True,
               test_max_pts=400000, scaling=1.):
     """
@@ -192,8 +195,90 @@ def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
         
         if (not inverse_problem) or (inverse_problem and (inverse_problem_guess is None)):
             inverse_problem_guess = pde_const
+
+        if pde_name == 'poisson-2d':
+
+            # return load_data('burgers-1d', pde_const=pde_const, use_pdebench=True,)
+
+            curr_dir = os.path.dirname(os.path.realpath(__file__))
+
+            def load_training_data():
+                data = np.loadtxt('/Users/moritzhauschulz/oxford_code/tdl/pinnacle_2024/pinnacle_code/deepxde_al_patch/dataset/poisson1_cg_data.dat', comments="%").astype(np.float64)
+                
+                return data[:, 0:2] * scaling, data[:,2:]
+                
+            def _pde(x, y, const):
+                u_xx = dde.grad.hessian(y, x, i=0, j=0)[0]
+                u_yy = dde.grad.hessian(y, x, i=1, j=1)[0]
+
+                return (u_xx + u_yy,)
+            # def _pde(x, y, const):
+            #     _, y_fn = y
+                
+            #     def laplacian(g_):
+            #         # Define scalar output function
+            #         scalar_fn = lambda x_: g_(x_)[0]
+                    
+            #         # First derivatives
+            #         grad_fn = jax.grad(scalar_fn)
+            #         batch_grad = jax.vmap(grad_fn)
+                    
+            #         # Second derivatives
+            #         def second_deriv(axis):
+            #             return jax.vmap(jax.grad(lambda x_: batch_grad(x_)[0, axis]))(x)[:, axis:axis+1]
+                    
+            #         # Compute u_xx and u_yy
+            #         return second_deriv(0) + second_deriv(1)
+                
+            #     return (laplacian(y_fn),)
+            
+            scale = scaling
+            bbox = [-scale / 2, scale / 2, -scale / 2, scale / 2]
+            geom = dde.geometry.Rectangle(xmin=[-scale / 2, -scale / 2], xmax=[scale / 2, scale / 2])
+            circ = np.array([[0.3, 0.3, 0.1], [-0.3, 0.3, 0.1], [0.3, -0.3, 0.1], [-0.3, -0.3, 0.1]]) * scale
+            # for c in circ:
+            #     disk = dde.geometry.Disk(c[0:2], c[2])
+            #     geom = dde.geometry.CSGDifference(geom, disk)
+            # Create first disk
+            # Create all disks at once
+            # Create all disks
+            disks = [dde.geometry.Disk(c[0:2], c[2]) for c in circ]
+
+            # Union disks using reduce
+            disks_12 = dde.geometry.CSGUnion(disks[0], disks[1])
+            disks_34 = dde.geometry.CSGUnion(disks[2], disks[3])
+
+            all_disks = dde.geometry.CSGUnion(disks_12, disks_34)
+
+
+            # Single difference operation
+            new_geom = dde.geometry.CSGDifference(geom, all_disks)
+
+
+            def rec_boundary(x, on_boundary):
+                return on_boundary and (
+                    np.isclose(x[0], bbox[0]) or np.isclose(x[0], bbox[1]) or np.isclose(x[1], bbox[2]) or np.isclose(x[1], bbox[3])
+                )
+
+            def circ_boundary(x, on_boundary):
+                return on_boundary and not rec_boundary(x, on_boundary)
+
+            icbc = [
+                dde.DirichletBC(geom, (lambda _: 1), rec_boundary, component=0),
+                dde.DirichletBC(all_disks, (lambda _: 0), circ_boundary, component=0)
+            ]
+            func = None
+
+            xy, u = load_training_data()
+            aux = {
+                'test_x': jnp.array(xy, dtype=jnp.float32),
+                'test_y': jnp.array(u, dtype=jnp.float32)
+            }
+            geomtime = new_geom
+            func = None
+
         
-        if pde_name == 'heat-1d':
+        elif pde_name == 'heat-1d':
                         
             # Problem parameters:
             L = 1  # Length of the bar
@@ -355,7 +440,7 @@ def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
             from scipy.io import loadmat
             
             curr_dir = os.path.dirname(os.path.realpath(__file__))
-            data = loadmat(os.path.join(curr_dir, 'dataset/KdV.mat'))
+            data = loadmat(os.path.join(curr_dir, '/Users/moritzhauschulz/oxford_code/tdl/pinnacle_2024/pinnacle_code/deepxde_al_patch/dataset/KdV.mat'))
             t_star = data['tt'].flatten()[:,None]
             x_star = data['x'].flatten()[:,None]
             Exact = np.real(data['uu'])
@@ -433,7 +518,7 @@ def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
             
             def gen_traindata():
                 curr_dir = os.path.dirname(os.path.realpath(__file__))
-                data = np.load(os.path.join(curr_dir, "dataset/reaction.npz"))
+                data = np.load(os.path.join(curr_dir, "/Users/moritzhauschulz/oxford_code/tdl/pinnacle_2024/pinnacle_code/deepxde_al_patch/dataset/reaction.npz"))
                 t, x, ca, cb = data["t"], data["x"], data["Ca"], data["Cb"]
                 X, T = np.meshgrid(x, t)
                 X = np.reshape(X, (-1, 1))
@@ -1067,7 +1152,7 @@ def load_data(pde_name, pde_const=tuple(), use_pdebench=False,
             ext_vars = [dde.Variable(v) for v in inverse_problem_guess]
         else:
             pde = lambda x, y: _pde(x, y, const=pde_const)
-        
+
         
         # in the case that we need to generate test case ourselves
         if func is not None:

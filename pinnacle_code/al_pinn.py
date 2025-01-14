@@ -4,6 +4,8 @@ os.environ["OPENBLAS_NUM_THREADS"] = "8"
 os.environ["MKL_NUM_THREADS"] = "8"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "8" 
 os.environ["NUMEXPR_NUM_THREADS"] = "8" 
+# os.environ['JAX_TRACEBACK_FILTERING'] = 'off'
+
 
 import sys
 import pickle as pkl
@@ -83,9 +85,13 @@ parser.add_argument('--al_loss_weights', action=argparse.BooleanOptionalAction, 
 parser.add_argument('--autoscale_loss_w_bcs', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--random_points_for_weights', action=argparse.BooleanOptionalAction, default=False)
 parser.add_argument('--autoscale_first', action=argparse.BooleanOptionalAction, default=False)
-parser.add_argument('--pickle_trainloop', action=argparse.BooleanOptionalAction, default=True)
+
+parser.add_argument('--lra_loss_w_bcs', action=argparse.BooleanOptionalAction, default=False)
 
 parser.add_argument('--save_grads', action=argparse.BooleanOptionalAction, default=True)
+
+parser.add_argument('--sample_each_round', action=argparse.BooleanOptionalAction, default=False)
+
 
 parser.add_argument('--scaling', type=float, default=1.)
 
@@ -141,7 +147,14 @@ select_anchors_every = args.select_anchors_every
 mem_pts_total_budget = args.mem_pts_total_budget
 anchor_budget = args.anchor_budget
 loss_w_bcs = args.loss_w_bcs
+
 autoscale_loss_w_bcs = args.autoscale_loss_w_bcs
+random_points_for_weights = args.random_points_for_weights
+autoscale_first = args.autoscale_first
+save_grads = args.save_grads
+sample_each_round = args.sample_each_round
+lra_loss_w_bcs = args.lra_loss_w_bcs
+
 auto_al = args.auto_al
 
 method = args.method
@@ -199,6 +212,9 @@ al_every = {al_every}
 select_anchors_every = {select_anchors_every}
 loss_w_bcs = {loss_w_bcs}
 autoscale_loss_w_bcs = {autoscale_loss_w_bcs}
+
+
+
 auto_al = {auto_al}
 
 method = {method}
@@ -439,8 +455,12 @@ train_loop = ModifiedTrainLoop(
     anc_measurable_idx=anc_measurable_idx,
     loss_w_bcs=loss_w_bcs,
     autoscale_loss_w_bcs=autoscale_loss_w_bcs,
+    autoscale_first = autoscale_first,
+    sample_each_round=sample_each_round,
+    lra_loss_w_bcs=lra_loss_w_bcs,
+    random_points_for_weights=random_points_for_weights,
     ntk_ratio_threshold=(0.5 if auto_al else None),
-    tensorboard_plots=(eqn in {'conv-1d', 'burgers-1d'}),
+    tensorboard_plots=(eqn in {'conv-1d', 'burgers-1d', 'poisson-2d'}),
     log_dir=tensorboard_dir,
     **optim_dict
 )
@@ -455,9 +475,12 @@ def savefig(fname, fig):
 
 
 """ TRAIN STAGE """
+purge_every = 1000 #TODO REMOVE
 
 lb_step = 0
 ub_step = purge_every
+
+
 
 try:
     

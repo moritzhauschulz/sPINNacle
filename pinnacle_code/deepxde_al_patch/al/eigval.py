@@ -147,7 +147,8 @@ class EigenvaluePointSelector(NTKBasedAL):
                 elif isinstance(bc, dde.icbc.initial_conditions.IC):
                     d['bcs'].append(jnp.array(self.data.geom.random_initial_points(self.num_candidates_bcs)))
                 else:
-                    d['bcs'].append(jnp.array(self.data.geom.random_boundary_points(self.num_candidates_init)))
+                    d['bcs'].append(jnp.array(bc.geom.random_boundary_points(self.num_candidates_init))) #I changed this so that we sample from the relevant geometries for that boundary
+                    # d['bcs'].append(jnp.array(self.data.geom.random_boundary_points(self.num_candidates_init)))
                 # else:
                 #     d['bcs'].append(jnp.array(bc.filter(self.data.train_x_bc)))
             if self.select_anchor or self.use_anc_in_train:
@@ -309,23 +310,25 @@ class EigenvaluePointSelector(NTKBasedAL):
         # TODO Set how the sampling should be done. Options are 'pseudo' and 'uniform' for now
         if self.sampling == 'pseudo':
             test_pts_res = jnp.array(self.data.geom.random_points(self.num_candidates_res, random='pseudo'))
-            test_pts_bc = jnp.array(self.data.geom.random_boundary_points(self.num_candidates_bcs))
+            # test_pts_bc = jnp.array(self.data.geom.random_boundary_points(self.num_candidates_bcs)) #TODO make for each BC
+            test_pts_bc = [jnp.array(bc.geom.random_boundary_points(self.num_candidates_bcs)) for bc in self.data.bcs]
             try:
                 test_pts_init = jnp.array(self.data.geom.random_initial_points(self.num_candidates_init))
             except AttributeError:
                 test_pts_init = None
         elif self.sampling == 'uniform':
             test_pts_res = jnp.array(self.data.geom.uniform_points(self.num_candidates_res, boundary=False))
-            test_pts_bc = jnp.array(self.data.geom.uniform_boundary_points(self.num_candidates_bcs))
+            # test_pts_bc = jnp.array(self.data.geom.uniform_boundary_points(self.num_candidates_bcs)) #TODO make for each BC
+            test_pts_bc = [jnp.array(bc.geom.uniform_boundary_points(self.num_candidates_bcs)) for bc in self.data.bcs]
             try:
                 test_pts_init = jnp.array(self.data.geom.uniform_initial_points(self.num_candidates_init))
             except AttributeError:
                 test_pts_init = None
             
         if test_pts_init is None:
-            test_pts_all = jnp.concatenate([test_pts_res, test_pts_bc], axis=0)
+            test_pts_all = jnp.concatenate([test_pts_res, jnp.concatenate(test_pts_bc)], axis=0) #TODO make for each BC (not used, ignored for now)
         else:
-            test_pts_all = jnp.concatenate([test_pts_res, test_pts_bc, test_pts_init], axis=0)
+            test_pts_all = jnp.concatenate([test_pts_res, jnp.concatenate(test_pts_bc), test_pts_init], axis=0)
 
         # Need to get test_pts into dictionary format
         # dict_test_pts = {
@@ -356,7 +359,7 @@ class EigenvaluePointSelector(NTKBasedAL):
                 dict_test_pts['bcs'].append(jnp.array(bc.points[jnp.array(pts_subset_idx)]))
             else:
                 # print(f'BCS_{i+1} is BC type, adding in test_pts_bc')
-                dict_test_pts['bcs'].append(test_pts_bc)
+                dict_test_pts['bcs'].append(test_pts_bc[i]) #TODO make for each BC
             if self.dupl_pts_res is True:
                 dict_test_pts['res']= jnp.concatenate([dict_test_pts['res'], dict_test_pts['bcs'][i]], axis=0)
                 # print(f'BCS_{i+1} included in residual')
@@ -515,7 +518,7 @@ class EigenvaluePointSelector(NTKBasedAL):
                 bc_idx = idx[(idx_start <= idx) & (idx < (idx_start + j))] - idx_start
                 # print(f'bc_idx_{i} = {bc_idx}')
                 bc_pts = bc[bc_idx]
-                test_pts_new['bcs'].append(bc_pts)
+                test_pts_new['bcs'].append(bc_pts) #TODO: this could be an issue
                 idx_start += j
             if self.select_anchor and ('anc' in d.keys()):
                 anc_idx = idx[idx_start <= idx] - idx_start

@@ -125,7 +125,7 @@ def plot_prediction(train_loop, step_idxs=None, res=100, out_idx=0, plot_trainin
     fig.colorbar(cb, ax=axs)
     return fig
 
-def plot_multiple_predictions(train_loops, train_loop_labels=None, step_idxs=None, res=100, out_idx=0, plot_training_data=True, t_plot=None):
+def plot_multiple_predictions(train_loops, fs=16, ls=16, train_loop_labels=None, step_idxs=None, res=100, out_idx=0, plot_training_data=True, t_plot=None, marker_size=8):
     """
     Plots predictions for multiple train loops.
     
@@ -163,7 +163,7 @@ def plot_multiple_predictions(train_loops, train_loop_labels=None, step_idxs=Non
     # Initialize the figure and axes
     num_train_loops = len(train_loops)
     num_cols = num_train_loops + (1 if has_step_idxs else 0)  # True solution + each train_loop + optional legend
-    fig, axs = plt.subplots(nrows=1, ncols=num_cols, figsize=(plt.rcParams['figure.figsize'][0] * (num_cols + 1.25), plt.rcParams['figure.figsize'][0]))
+    fig, axs = plt.subplots(nrows=1, ncols=num_cols, figsize=(plt.rcParams['figure.figsize'][0] * (num_cols + 1.25), plt.rcParams['figure.figsize'][0] + 1.25))
 
     # Compute z_actual from the first train loop
     z_actual = train_loops[0].y_test[:, out_idx].flatten() if in_dim <= 2 else train_loops[0].y_test[idxs, out_idx].flatten()
@@ -182,7 +182,10 @@ def plot_multiple_predictions(train_loops, train_loop_labels=None, step_idxs=Non
     Xi, Yi = np.meshgrid(xi, yi)
     zi = interpolator(Xi, Yi)
     cb = axs[-1].contourf(xi, yi, zi, levels=levels, cmap="RdBu_r")
-    axs[-1].set_title('True Solution')
+    axs[-1].set_title('True Solution', fontsize=fs)
+    axs[-1].tick_params(axis='both', which='major', labelsize=ls, length=4, width=1)
+    axs[-1].tick_params(axis='both', which='minor', labelsize=ls, length=4, width=1)
+    axs[-1].yaxis.set_visible(False)
 
     # Plot each train_loop's prediction
     for i, train_loop in enumerate(train_loops):
@@ -191,14 +194,20 @@ def plot_multiple_predictions(train_loops, train_loop_labels=None, step_idxs=Non
             interpolator = tri.LinearTriInterpolator(triang, zs)
             zi = interpolator(Xi, Yi)
             axs[i].contourf(xi, yi, zi, levels=levels, cmap="RdBu_r")
-            axs[i].set_title(f'{i + 1 if train_loop_labels is None else train_loop_labels[i]}, Step {step_idxs[0]}')
+            axs[i].set_title(f'{i + 1 if train_loop_labels is None else train_loop_labels[i]}, Step {step_idxs[0]}', fontsize=fs)
+            axs[i].tick_params(axis='both', which='major', labelsize=ls, length=4, width=1)
+            axs[i].tick_params(axis='both', which='minor', labelsize=ls, length=4, width=1)
+            if i != 0:
+                axs[i].yaxis.set_visible(False)
 
             if plot_training_data and in_dim == 2:
-                train_loop.plot_training_data(step_idx=step_idxs[0], ax=axs[i])
+                train_loop.plot_training_data(step_idx=step_idxs[0], ax=axs[i], marker_size=marker_size)
 
 
     # Add a colorbar to the last column
-    fig.colorbar(cb, ax=axs[-1])
+    cbar = fig.colorbar(cb, ax=axs[-1])
+    cbar.ax.tick_params(labelsize=ls)
+    plt.subplots_adjust(wspace=-0.5)
 
     plt.tight_layout()
     return fig

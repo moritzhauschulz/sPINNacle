@@ -4,6 +4,8 @@ import pickle as pkl
 from collections.abc import MutableMapping
 from typing import Dict, Any, Callable
 import time
+from jax.flatten_util import ravel_pytree
+from itertools import cycle
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as tri
@@ -13,7 +15,6 @@ import tqdm
 import jax
 import jax.numpy as jnp
 import flax
-from flax import linen as nn
 import optax
 import jaxopt
 
@@ -25,6 +26,7 @@ from .icbc_patch import generate_residue, get_corresponding_y
 from .utils import to_cpu
 
 from .multiadam_jax import multiadam
+from .multiadam_jax_alt import multiadam_optimizer as alt_multiadam
 import gc
 
 
@@ -42,7 +44,8 @@ class ModifiedTrainLoop:
                  anc_point_filter: Callable = None, anc_measurable_idx: int = None,
                  loss_w_bcs: float = 1.0, loss_w_pde: float = 1.0, loss_w_anc: float = 1.0, autoscale_loss_w_bcs: bool = False, autoscale_first: bool = False,
                  save_grads: bool = True, al_loss_weights: bool = False,
-                 random_points_for_weights: bool = False, ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False
+                 random_points_for_weights: bool = False, ntk_ratio_threshold: float = None, check_budget: int = 200, tensorboard_plots = False,
+                 sample_each_round: bool = False, lra_loss_w_bcs: bool = False
                  ):
         #for recording gradient weight distribution
         # self.pde_grads = None  # Changed to dict
@@ -70,6 +73,8 @@ class ModifiedTrainLoop:
 
         self.autoscale_first = autoscale_first
         self.random_points_for_weights = random_points_for_weights
+        self.sample_each_round = sample_each_round
+        self.lra_loss_w_bcs = lra_loss_w_bcs
         
         self.optim_method = optim_method
         self.optim_lr = optim_lr
@@ -130,7 +135,8 @@ class ModifiedTrainLoop:
         # for debugging
         self.opt_state = None
         self.tensorboard_plots = tensorboard_plots
-        
+
+            
         self.reset_training()
         
     def reset_training(self):
@@ -144,6 +150,8 @@ class ModifiedTrainLoop:
 
         self.loss_steps = []
         self.loss_train = []
+        self.loss_pde = []
+        self.loss_bc = []
         self.test_res = []
         self.test_err = []
         self.snapshot_data = {
@@ -185,16 +193,18 @@ class ModifiedTrainLoop:
         return function_error
     
     def _generate_pde_res(self):
-        
         def _pde_residue_fn(params, xs):
             if self.inverse_problem:
                 nn_params, ext_params = params 
                 f_ = lambda xs: self.net.apply(nn_params, xs, training=True)
                 return jnp.abs(self.data.pde(xs, (f_(xs), f_), ext_params)[0])
             else:
+                # print(f'xs is {xs}')
                 f_ = lambda xs: self.net.apply(params[0], xs, training=True)
-                return jnp.abs(self.data.pde(xs, (f_(xs), f_))[0])
-        
+                # print(f'f_ is {f_}')
+                out = self.data.pde(xs, (f_(xs), f_))[0]
+                return jnp.abs(out)
+                # return jnp.abs(self.data.pde(xs, f_(xs))[0])
         return _pde_residue_fn
     
     def _generate_icbc_err(self):
@@ -217,46 +227,46 @@ class ModifiedTrainLoop:
     
     def _do_active_learning(self, do_anchor: bool = False):
 
-        if self.autoscale_loss_w_bcs and self.autoscale_first:
-            print('autoscaling')
-            if self.random_points_for_weights:
-                d = self._get_random_samples()
-            else:
-                d = self.current_samples
+        # if self.autoscale_loss_w_bcs and self.autoscale_first:
+        #     print('autoscaling')
+        #     if self.random_points_for_weights:
+        #         d = self._get_random_samples()
+        #     else:
+        #         d = self.current_samples
             
-            ntk_pde = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['res'], code=-1))
-            eigvals_pde = jnp.linalg.eigvalsh(ntk_pde)
-            tr_pde = jnp.sum(eigvals_pde)
-            print(f'PDE Cl top eigvals = {eigvals_pde[-min(5, eigvals_pde.shape[0]):]}')
-            print(f'PDE Cl trace = {tr_pde}')
+        #     ntk_pde = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['res'], code=-1))
+        #     eigvals_pde = jnp.linalg.eigvalsh(ntk_pde)
+        #     tr_pde = jnp.sum(eigvals_pde)
+        #     print(f'PDE Cl top eigvals = {eigvals_pde[-min(5, eigvals_pde.shape[0]):]}')
+        #     print(f'PDE Cl trace = {tr_pde}')
             
             
-            ntk_bcs_list = [self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['bcs'][i], code=i)) for i in range(len(d['bcs']))]
-            eigvals_bcs = [jnp.linalg.eigvalsh(ntkbc) for ntkbc in ntk_bcs_list]
-            tr_bcs = [jnp.sum(eigbc) for eigbc in eigvals_bcs]
-            for i, bc in enumerate(eigvals_bcs):
-                print(f'BC {i} Cl top eigvals = {bc[-min(5, bc.shape[0]):]}')
-                print(f'BC {i} Cl trace = {tr_bcs[i]}')
+        #     ntk_bcs_list = [self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['bcs'][i], code=i)) for i in range(len(d['bcs']))]
+        #     eigvals_bcs = [jnp.linalg.eigvalsh(ntkbc) for ntkbc in ntk_bcs_list]
+        #     tr_bcs = [jnp.sum(eigbc) for eigbc in eigvals_bcs]
+        #     for i, bc in enumerate(eigvals_bcs):
+        #         print(f'BC {i} Cl top eigvals = {bc[-min(5, bc.shape[0]):]}')
+        #         print(f'BC {i} Cl trace = {tr_bcs[i]}')
             
-            if 'anc' in d.keys():
-                ntk_anc = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['anc'], code=-2))
-                eigvals_anc = jnp.linalg.eigvalsh(ntk_anc)
-                print(f'Exp top eigvals = {eigvals_pde[-min(5, eigvals_anc.shape[0]):]}')
-                tr_anc = jnp.sum(eigvals_anc)
-                print(f'Exp trace = {tr_anc}')
-            else:
-                tr_anc = 0.
+        #     if 'anc' in d.keys():
+        #         ntk_anc = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['anc'], code=-2))
+        #         eigvals_anc = jnp.linalg.eigvalsh(ntk_anc)
+        #         print(f'Exp top eigvals = {eigvals_pde[-min(5, eigvals_anc.shape[0]):]}')
+        #         tr_anc = jnp.sum(eigvals_anc)
+        #         print(f'Exp trace = {tr_anc}')
+        #     else:
+        #         tr_anc = 0.
                 
-            total = tr_pde + tr_anc + sum(tr_bcs)
-            self.loss_w_pde = total / tr_pde if tr_pde > 0. else 0.
-            self.loss_w_bcs = [total/bc if bc > 0. else 0. for bc in tr_bcs]
-            self.loss_w_anc = total / tr_anc if tr_anc > 0. else 0.
+        #     total = tr_pde + tr_anc + sum(tr_bcs)
+        #     self.loss_w_pde = total / tr_pde if tr_pde > 0. else 0.
+        #     self.loss_w_bcs = [total/bc if bc > 0. else 0. for bc in tr_bcs]
+        #     self.loss_w_anc = total / tr_anc if tr_anc > 0. else 0.
             
-            print('loss_w_pde =', self.loss_w_pde)
-            print('loss_w_bcs =', self.loss_w_bcs)
-            print('loss_w_anc =', self.loss_w_anc)
+        #     print('loss_w_pde =', self.loss_w_pde)
+        #     print('loss_w_bcs =', self.loss_w_bcs)
+        #     print('loss_w_anc =', self.loss_w_anc)
 
-            del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, ntk_anc, eigvals_anc, tr_anc, total
+        #     del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, ntk_anc, eigvals_anc, tr_anc, total
         
         self._last_al_step = self.current_train_step
         
@@ -290,14 +300,27 @@ class ModifiedTrainLoop:
                 print('Pseudo-training using existing train function')
             
             # do GD a few more steps to get pseudo data
-            solver = self._generate_solver(value_and_grad=self.loss_fn_grad, aux_loss=[self.pde_loss_grad , self.bc_loss_grad])
+            if self.optim_method == 'multiadam':
+                solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+            else:
+                solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+
             target_fn_param = self.model.params
             if self.opt_state is None:
-                opt_state = solver.init_state(target_fn_param)
+                if self.optim_method == 'multiadam':
+                    opt_state = solver.init(target_fn_param)
+                else:
+                    opt_state = solver.init_state(target_fn_param)
             else:
                 opt_state = self.opt_state
             for r_inside in range(steps):
-                target_fn_param, opt_state = solver.update(target_fn_param, opt_state)
+                if self.optim_method == 'multiadam':
+                    grads = [jax.grad(self.pde_loss_fn)(target_fn_param), jax.grad(self.bc_loss_fn)(params)]
+                    updates, opt_state = solver.update(grads, opt_state, params)
+                    target_fn_param = optax.apply_updates(target_fn_param, updates)
+                else:
+                    target_fn_param, opt_state = solver.update(target_fn_param, opt_state)
+                
             point_sel_args_d['target_fn_param'] = target_fn_param
             
             print('Pseudo-training done.')
@@ -314,7 +337,8 @@ class ModifiedTrainLoop:
             anc_idx = self.anc_measurable_idx
         else:
             anc_idx = self.anc_measurable_idx[0]
-            
+
+
         self.al = AL_CONSTRUCTOR[self.point_selector_method](
             model=self.model,
             inverse_problem=self.inverse_problem,
@@ -361,90 +385,99 @@ class ModifiedTrainLoop:
         # )
         
         # compute kernel
-        if self.autoscale_loss_w_bcs and not self.autoscale_first:
-            print('autoscaling')
-            if self.random_points_for_weights:
-                d = self._get_random_samples()
-            else:
-                d = self.current_samples
+        # if self.autoscale_loss_w_bcs and not self.autoscale_first:
+        #     print('autoscaling')
+        #     if self.random_points_for_weights:
+        #         d = self._get_random_samples()
+        #     else:
+        #         d = self.current_samples
             
-            ntk_pde = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['res'], code=-1))
-            eigvals_pde = jnp.linalg.eigvalsh(ntk_pde)
-            tr_pde = jnp.sum(eigvals_pde)
-            print(f'PDE Cl top eigvals = {eigvals_pde[-min(5, eigvals_pde.shape[0]):]}')
-            print(f'PDE Cl trace = {tr_pde}')
+        #     ntk_pde = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['res'], code=-1))
+        #     eigvals_pde = jnp.linalg.eigvalsh(ntk_pde)
+        #     tr_pde = jnp.sum(eigvals_pde)
+        #     print(f'PDE Cl top eigvals = {eigvals_pde[-min(5, eigvals_pde.shape[0]):]}')
+        #     print(f'PDE Cl trace = {tr_pde}')
             
             
-            ntk_bcs_list = [self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['bcs'][i], code=i)) for i in range(len(d['bcs']))]
-            eigvals_bcs = [jnp.linalg.eigvalsh(ntkbc) for ntkbc in ntk_bcs_list]
-            tr_bcs = [jnp.sum(eigbc) for eigbc in eigvals_bcs]
-            for i, bc in enumerate(eigvals_bcs):
-                print(f'BC {i} Cl top eigvals = {bc[-min(5, bc.shape[0]):]}')
-                print(f'BC {i} Cl trace = {tr_bcs[i]}')
+        #     ntk_bcs_list = [self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['bcs'][i], code=i)) for i in range(len(d['bcs']))]
+        #     eigvals_bcs = [jnp.linalg.eigvalsh(ntkbc) for ntkbc in ntk_bcs_list]
+        #     tr_bcs = [jnp.sum(eigbc) for eigbc in eigvals_bcs]
+        #     for i, bc in enumerate(eigvals_bcs):
+        #         print(f'BC {i} Cl top eigvals = {bc[-min(5, bc.shape[0]):]}')
+        #         print(f'BC {i} Cl trace = {tr_bcs[i]}')
             
-            if 'anc' in d.keys():
-                ntk_anc = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['anc'], code=-2))
-                eigvals_anc = jnp.linalg.eigvalsh(ntk_anc)
-                print(f'Exp top eigvals = {eigvals_pde[-min(5, eigvals_anc.shape[0]):]}')
-                tr_anc = jnp.sum(eigvals_anc)
-                print(f'Exp trace = {tr_anc}')
-                del ntk_anc, ntk_anc
-            else:
-                tr_anc = 0.
+        #     if 'anc' in d.keys():
+        #         ntk_anc = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['anc'], code=-2))
+        #         eigvals_anc = jnp.linalg.eigvalsh(ntk_anc)
+        #         print(f'Exp top eigvals = {eigvals_pde[-min(5, eigvals_anc.shape[0]):]}')
+        #         tr_anc = jnp.sum(eigvals_anc)
+        #         print(f'Exp trace = {tr_anc}')
+        #         del ntk_anc, ntk_anc
+        #     else:
+        #         tr_anc = 0.
                 
-            total = tr_pde + tr_anc + sum(tr_bcs)
-            self.loss_w_pde = total / tr_pde if tr_pde > 0. else 0.
-            self.loss_w_bcs = [total/bc if bc > 0. else 0. for bc in tr_bcs]
-            self.loss_w_anc = total / tr_anc if tr_anc > 0. else 0.
+        #     total = tr_pde + tr_anc + sum(tr_bcs)
+        #     self.loss_w_pde = total / tr_pde if tr_pde > 0. else 0.
+        #     self.loss_w_bcs = [total/bc if bc > 0. else 0. for bc in tr_bcs]
+        #     self.loss_w_anc = total / tr_anc if tr_anc > 0. else 0.
             
-            print('loss_w_pde =', self.loss_w_pde)
-            print('loss_w_bcs =', self.loss_w_bcs)
-            print('loss_w_anc =', self.loss_w_anc)
+        #     print('loss_w_pde =', self.loss_w_pde)
+        #     print('loss_w_bcs =', self.loss_w_bcs)
+        #     print('loss_w_anc =', self.loss_w_anc)
 
-            del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, tr_anc, total
+        #     del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, tr_anc, total
         
-        if not self.optim_method == 'multiadam':
-            def new_loss(params):
+        # if not self.optim_method == 'multiadam':
+        #     def new_loss(params):
             
-                # Calculate loss
-                # TODO to add in the loss of the active learning samples and also include weights
-                loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
-                # Adjusting to use the new loss_w_bcs array
-                for i in range(len(self.current_samples['bcs'])):
-                    loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
-                if 'anc' in self.current_samples.keys():
-                    loss += self.loss_w_anc * jnp.mean(soln_train_loss(params[0], anc_x, anc_y) ** 2)
-                return loss
-            self.loss_fn = jax.jit(new_loss)
-            self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
-            
+        #         # Calculate loss
+        #         # TODO to add in the loss of the active learning samples and also include weights
+        #         loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
+        #         # Adjusting to use the new loss_w_bcs array
+        #         for i in range(len(self.current_samples['bcs'])):
+        #             loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
+        #         if 'anc' in self.current_samples.keys():
+        #             loss += self.loss_w_anc * jnp.mean(soln_train_loss(params[0], anc_x, anc_y) ** 2)
+        #         return loss
+        #     self.loss_fn = jax.jit(new_loss)
+        #     self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
+        self.update_functions()
 
-        else:
-            def new_pde_loss(params):
-                # Calculate losses separately
-                pde_loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
-                # Adjusting to use the new loss_w_bcs array
-                return pde_loss
-            def new_bc_loss(params):
-                bc_loss = 0
-                for i in range(len(self.current_samples['bcs'])):
-                    bc_loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
-                if 'anc' in self.current_samples.keys():
-                    raise NotImplementedError("Multiadam optimization with anchor points not implemented") 
-                return bc_loss
-            def new_loss(params):
-                # Calculate losses separately
-                pde_loss = new_pde_loss(params)
-                bc_loss = new_bc_loss(params)
-                loss = pde_loss + bc_loss
-                return loss #, {'pde_loss': pde_loss, 'bc_loss': bc_loss}
-            
-            self.loss_fn = jax.jit(new_loss)
-            self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
-            self.pde_loss_fn = jax.jit(new_pde_loss)
-            self.pde_loss_fn_grad = jax.value_and_grad(self.pde_loss_fn) 
-            self.bc_loss_fn = jax.jit(new_bc_loss)
-            self.bc_loss_fn_grad = jax.value_and_grad(self.bc_loss_fn) 
+    def update_functions(self):
+        def new_pde_loss(params, xs=None):
+            # Calculate losses separately
+            pde_loss = self.loss_w_pde * jnp.mean(self.pde_residue_fn(params, self.current_samples['res']) ** 2)
+            # Adjusting to use the new loss_w_bcs array
+            return pde_loss
+        def new_bc_loss(params, xs=None):
+            bc_loss = 0
+            for i in range(len(self.current_samples['bcs'])):
+                bc_loss += self.loss_w_bcs[i] * jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
+            if 'anc' in self.current_samples.keys():
+                raise NotImplementedError("Multiadam optimization with anchor points not implemented") 
+            return bc_loss
+        def unweighted_bc_loss(params, xs=None):
+            bc_loss = 0
+            for i in range(len(self.current_samples['bcs'])):
+                bc_loss += jnp.mean(self.icbc_error_fns[i](params[0], self.current_samples['bcs'][i]) ** 2)
+            if 'anc' in self.current_samples.keys():
+                raise NotImplementedError("Multiadam optimization with anchor points not implemented") 
+            return bc_loss
+        def new_loss(params):
+            # Calculate losses separately
+            pde_loss = new_pde_loss(params)
+            bc_loss = new_bc_loss(params)
+            loss = pde_loss + bc_loss
+            return loss #, {'pde_loss': pde_loss, 'bc_loss': bc_loss}
+        
+        self.loss_fn = jax.jit(new_loss)
+        self.loss_fn_grad = jax.value_and_grad(self.loss_fn) 
+        self.pde_loss_fn = jax.jit(new_pde_loss)
+        self.pde_loss_fn_grad = jax.value_and_grad(self.pde_loss_fn) 
+        self.bc_loss_fn = jax.jit(new_bc_loss)
+        self.bc_loss_fn_grad = jax.value_and_grad(self.bc_loss_fn) 
+        self.unw_bc_loss_fn = jax.jit(unweighted_bc_loss)
+        self.unw_bc_loss_fn_grad = jax.value_and_grad(self.unw_bc_loss_fn) 
         
     def _generate_solver(self, value_and_grad):
         # # TODO to add in other optimizers like L-BFGS
@@ -453,14 +486,20 @@ class ModifiedTrainLoop:
         # }[self.optim_method]
         if self.optim_method == 'multiadam':
             # Configure MultiAdam with 2 groups - PDE and boundary
-            opt = multiadam(
-                learning_rate=self.optim_lr,
+            # opt = multiadam(
+            #     learning_rate=self.optim_lr,
+            #     group_weights=[0.5, 0.5],  # Weight PDE vs boundary
+            #     loss_group_idx=[0, 1], # 0=PDE, 1=BC
+            #     aux_loss=aux_loss,
+            #     **self.optim_args
+            # )
+            # solver = jaxopt.OptaxSolver(opt=opt, fun=value_and_grad, value_and_grad=True)
+            solver = alt_multiadam(
+                lr=self.optim_lr,
                 group_weights=[0.5, 0.5],  # Weight PDE vs boundary
-                loss_group_idx=[0, 1], # 0=PDE, 1=BC
                 **self.optim_args
             )
-            solver = jaxopt.OptaxSolver(opt=opt, fun=value_and_grad, value_and_grad=True)
-        
+
         elif self.optim_method == 'adam':
             opt = optax.adam(learning_rate=self.optim_lr, **self.optim_args)
             solver = jaxopt.OptaxSolver(opt=opt, fun=value_and_grad, value_and_grad=True)
@@ -483,6 +522,8 @@ class ModifiedTrainLoop:
         params = self.current_params
         self.loss_steps.append(self.current_train_step)
         self.loss_train.append(self.loss_fn(params) if self.loss_fn else jnp.nan)
+        self.loss_pde.append(self.pde_loss_fn(params)/self.loss_w_pde if self.loss_fn else jnp.nan)
+        self.loss_bc.append(self.unw_bc_loss_fn(params) if self.loss_fn else jnp.nan)
         
         test_pred_list = self.net.apply(params[0], self.x_test, training=False)
         
@@ -501,6 +542,8 @@ class ModifiedTrainLoop:
             'samples': to_cpu(self.current_samples),
             'params': to_cpu(self.current_params),
             'loss_train': to_cpu(self.loss_train[-1]),
+            'loss_pde': to_cpu(self.loss_pde[-1]),
+            'loss_bc': to_cpu(self.loss_bc[-1]),
             'residue_test_mean': to_cpu(self.test_res[-1]),
             'error_test_mean': to_cpu(self.test_err[-1]),
             'pred_test': to_cpu(test_pred_list),
@@ -524,6 +567,8 @@ class ModifiedTrainLoop:
                 'samples': to_cpu(self.current_samples),
                 'params': to_cpu(self.current_params),
                 'loss_train': to_cpu(self.loss_train[-1]),
+                'loss_pde': to_cpu(self.loss_pde[-1]),
+                'loss_bc': to_cpu(self.loss_bc[-1]),
                 'residue_test_mean': to_cpu(self.test_res[-1]),
                 'error_test_mean': to_cpu(self.test_err[-1]),
                 'pred_test': to_cpu(test_pred_list),
@@ -539,6 +584,7 @@ class ModifiedTrainLoop:
         gc.collect()
 
         print(f'Step {self.loss_steps[-1]: 6d} : train_loss = {self.loss_train[-1]:.8f}, '
+              f'loss_pde = {self.loss_pde[-1]:.8f}, loss_bc = {self.loss_bc[-1]:.8f}, '
               f'test_res = {self.test_res[-1]:.8f}, test_err = {self.test_err[-1]:.8f}'
               + (f', ext_params = {[float(f"{float(x):.4f}") for x in self.current_params[1]]}' if self.inverse_problem else ''))
 
@@ -709,15 +755,25 @@ class ModifiedTrainLoop:
         if writer is not None:
             
             writer.add_scalar('Loss/train', float(self.loss_train[-1]), self.current_train_step)
+            writer.add_scalar('Loss/pde', float(self.loss_pde[-1]), self.current_train_step)
+            writer.add_scalar('Loss/bc', float(self.loss_bc[-1]), self.current_train_step)
             writer.add_scalar('Loss/test_res', float(self.test_res[-1]), self.current_train_step)
             writer.add_scalar('Loss/test_err', float(self.test_err[-1]), self.current_train_step)
 
-            if self.autoscale_loss_w_bcs:
+            if self.autoscale_loss_w_bcs or self.lra_loss_w_bcs:
                 # Loss function weights
-                for i in range(len(self._sample_intermediates['chosen_pts']['bcs'])):
-                    writer.add_scalar('Weights/loss_w_bcs', float(self.loss_w_bcs[i]), self.current_train_step)
+                # for i in range(len(self._sample_intermediates['chosen_pts']['bcs'])):
+                writer.add_scalar('Weights/loss_w_bcs', float(jnp.mean(jnp.array(self.loss_w_bcs))), self.current_train_step)
                 writer.add_scalar('Weights/loss_w_pde', float(self.loss_w_pde), self.current_train_step)
                 writer.add_scalar('Weights/loss_w_anc', float(self.loss_w_anc), self.current_train_step)
+            # if self.optim_method == 'multiadam' and self.opt_state is not None:
+            #     # Loss function weights
+            #     print(self.opt_state['exp_avg_sq'])
+            #     writer.add_scalar('Weights/loss_w_bcs', float(1/jnp.sqrt(float(self.opt_state['exp_avg_sq'][1]) + 1e-8)), self.current_train_step)
+            #     writer.add_scalar('Weights/loss_w_pde', float(1/jnp.sqrt(float(self.opt_state['exp_avg_sq'][0]) + 1e-8)), self.current_train_step)
+            #     writer.add_scalar('Weights/loss_w_anc', float(self.loss_w_anc), self.current_train_step)
+
+
 
             # Add gradient histograms
             if hasattr(self, 'pde_grads'):
@@ -835,6 +891,120 @@ class ModifiedTrainLoop:
         
         plt.close()
 
+    def lra_update_weights(self, writer):
+        if self.current_train_step % 500 == 0:
+            print('updating weights...')
+            plot, _ = self.plot_training_data(self.current_samples)
+            writer.add_figure('weight_samples', plot, global_step=self.current_train_step)
+            print(f"Sample sizes are: N_res={len(self.current_samples['res'])}, N_b={[len(self.current_samples['bcs'][i]) for i in range(len(self.current_samples['bcs']))]}")
+            
+        def pde_loss(params, res):
+            loss = jnp.mean(self.pde_residue_fn(params,res) ** 2)
+            return loss
+        
+        pde_grad = jax.grad(pde_loss)(self.current_params, self.current_samples['res'])
+        pde_grad = jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(pde_grad)])
+        # Get mean absolute value of gradients, flattening parameter tree first
+        max_pde_grad = jnp.max(jnp.abs(pde_grad))
+
+        loss_w_bcs = []
+        for i in range(len(self.current_samples['bcs'])):
+            def bc_loss(params, bcs):
+                loss = jnp.mean(self.icbc_error_fns[i](params[0], bcs) ** 2)
+                return loss
+            
+            bc_grad = jax.grad(bc_loss)(self.current_params, self.current_samples['bcs'][i])
+            bc_grad = jnp.concatenate([leaf.ravel() for leaf in jax.tree_util.tree_leaves(bc_grad)])
+            lambda_bc = max_pde_grad / jnp.mean(jnp.abs(bc_grad))
+            loss_w_bcs.append(lambda_bc)
+        
+        self.loss_w_bcs = [0.9 * self.loss_w_bcs[i] + (1 - 0.9) * loss_w_bcs[i] for i in range(len(self.loss_w_bcs))]
+
+        if self.current_train_step % 500 == 0:
+            print('updated weights:')
+            print('loss_w_pde =', self.loss_w_pde)
+            print('loss_w_bcs =', self.loss_w_bcs)
+            #print('loss_w_anc =', self.loss_w_anc)
+        
+        del pde_grad, max_pde_grad, bc_grad, lambda_bc
+
+    def ntk_update_weights(self, writer):
+
+        if self.random_points_for_weights:
+            res_proportion = 0.5
+            n_res = int(res_proportion * self.mem_pts_total_budget) if (len(self.model.data.bcs) > 0) else (self.mem_pts_total_budget)
+            n_per_bc = (self.mem_pts_total_budget - n_res) // len(self.model.data.bcs) if (len(self.model.data.bcs) > 0) else 0
+            
+            returned_pts = {
+                'res': jnp.array(self.model.data.geom.random_points(n_res, random='pseudo')),
+                'bcs': []
+            }
+            for i, bc in enumerate(self.model.data.bcs):
+                if isinstance(bc, dde.icbc.boundary_conditions.PointSetBC):
+                    idxs = jnp.array(np.random.choice(a=bc.points.shape[0], size=n_per_bc, replace=False))
+                    xs = bc.points[idxs, :]
+                elif isinstance(bc, dde.icbc.initial_conditions.IC):
+                    xs = jnp.array(self.model.data.geom.random_initial_points(n_per_bc))
+                else:
+                    # xs = jnp.array(self.data.geom.random_boundary_points(n_per_bc))
+                    xs = jnp.array(bc.geom.random_boundary_points(n_per_bc))
+                returned_pts['bcs'].append(xs)
+            d = returned_pts
+            print(f'Randomly selected {n_res} residual points and {n_per_bc} boundary points per BC')
+        else:
+            d = self.current_samples
+
+        if self.current_train_step % 50 == 0:
+            print('updating weights...')
+            plot, _ = self.plot_training_data(d)
+            writer.add_figure('weight_samples', plot, global_step=self.current_train_step)
+            print(f"Sample sizes are: N_res={len(d['res'])}, N_b={[len(d['bcs'][i]) for i in range(len(d['bcs']))]}")
+            
+        ntk_pde = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['res'], code=-1))
+        eigvals_pde = jnp.linalg.eigvalsh(ntk_pde)
+        tr_pde = jnp.sum(eigvals_pde)
+        if self.current_train_step % 50 == 0:
+            print(f'PDE Cl top eigvals = {eigvals_pde[-min(5, eigvals_pde.shape[0]):]}')
+            print(f'PDE Cl trace = {tr_pde}')
+        
+        ntk_bcs_list = [self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['bcs'][i], code=i)) for i in range(len(d['bcs']))]
+        eigvals_bcs = [jnp.linalg.eigvalsh(ntkbc) for ntkbc in ntk_bcs_list]
+        tr_bcs = [jnp.sum(eigbc) for eigbc in eigvals_bcs]
+        if self.current_train_step % 50 == 0:
+            for i, bc in enumerate(eigvals_bcs):
+                print(f'BC {i} Cl top eigvals = {bc[-min(5, bc.shape[0]):]}')
+                print(f'BC {i} Cl trace = {tr_bcs[i]}')
+        
+        if 'anc' in d.keys():
+            ntk_anc = self._ntk_fn.get_ntk(jac1=self._ntk_fn.get_jac(xs=d['anc'], code=-2))
+            eigvals_anc = jnp.linalg.eigvalsh(ntk_anc)
+            print(f'Exp top eigvals = {eigvals_pde[-min(5, eigvals_anc.shape[0]):]}')
+            tr_anc = jnp.sum(eigvals_anc)
+            print(f'Exp trace = {tr_anc}')
+        else:
+            tr_anc = 0.
+        if self.current_train_step % 50 == 0:
+            print('trace computation complete')
+        
+
+        if 'anc' in d.keys():
+            raise NotImplemented("Weight update for anchor not implemented")
+        else:
+            tr_anc = 0.
+            
+        total = tr_pde + tr_anc + sum(tr_bcs)
+        self.loss_w_pde = total / tr_pde if tr_pde > 0. else 0.
+        self.loss_w_bcs = [total/bc if bc > 0. else 0. for bc in tr_bcs]
+        self.loss_w_anc = total / tr_anc if tr_anc > 0. else 0.
+        
+        if self.current_train_step % 500 == 0:
+            print('updated weights:')
+            print('loss_w_pde =', self.loss_w_pde)
+            print('loss_w_bcs =', self.loss_w_bcs)
+            #print('loss_w_anc =', self.loss_w_anc)
+
+        del d, ntk_pde, eigvals_pde, tr_pde, ntk_bcs_list, eigvals_bcs, tr_bcs, tr_anc, total
+
     def train(self, train_steps=None):
         
         assert self.select_anchors_every % self.al_every == 0
@@ -860,18 +1030,39 @@ class ModifiedTrainLoop:
             self._do_active_learning(do_anchor=do_anchor)
             print(f'======= Done active learning =======')
             self._record(writer=writer, al_step=True)
-        solver = self._generate_solver(value_and_grad=self.loss_fn_grad, aux_loss=[self.pde_loss_grad , self.bc_loss_grad])
-        
-        for r in range(al_rounds):     
+                
+        # if self.optim_method == 'multiadam':
+        #     solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+        # else:
+        solver = self._generate_solver(value_and_grad=self.loss_fn_grad)
+
+        for r in range(al_rounds):
             
-            start = time.time()           
+            start = time.time()  
                 
             if opt_state is None:
-                opt_state = solver.init_state(params)
+                if self.optim_method == 'multiadam':
+                    opt_state = solver.init(params)
+                else:
+                    opt_state = solver.init_state(params)
                                                 
             for r_inside in range(self.al_every):
                 
                 self.current_train_step += 1
+                # print(f'now on iteration {self.current_train_step}')
+
+                if self.sample_each_round:
+                    self.current_samples, _ =  self.al.generate_samples(verbose=False)
+
+                if self.autoscale_loss_w_bcs and self.current_train_step % 10 == 0:
+                    self.ntk_update_weights(writer=writer)
+                    self.update_functions()
+                    solver = self._generate_solver(value_and_grad=self.loss_fn_grad) #check if this is necessary
+                elif self.lra_loss_w_bcs and self.current_train_step % 10 == 0:
+                    self.lra_update_weights(writer=writer)
+                    self.update_functions()
+                    solver = self._generate_solver(value_and_grad=self.loss_fn_grad) #check if this is necessary
+
 
                 # if self.current_train_step  % 50 == 0:
                 #     print(f'Current train step: {self.current_train_step}')
@@ -879,9 +1070,14 @@ class ModifiedTrainLoop:
                 # l_, grad = self.loss_fn_grad(params)
                 # updates, opt_state = opt.update(grad, opt_state)
                 # params = optax.apply_updates(params, updates)
-                params, opt_state = solver.update(params, opt_state)
+                if self.optim_method == 'multiadam':
+                    grads = [jax.grad(self.pde_loss_fn)(params), jax.grad(self.bc_loss_fn)(params)]
+                    updates, opt_state = solver.update(grads, opt_state, params)
+                    params = optax.apply_updates(params, updates)
+                else:
+                    params, opt_state = solver.update(params, opt_state)
                 
-                self.net.params = params[0]
+                self.net.params = params[0] 
                 self.model.params = params
                 self.opt_state = opt_state
                 self.current_params = params
@@ -916,20 +1112,24 @@ class ModifiedTrainLoop:
                         del pde_grad, bc_grad
 
                     self._record(writer=writer, al_step=(self.current_train_step % self.al_every == 0))
+
+                    print(f'completed snapshot at step {self.current_train_step}')
+
+                     # Clean up after each round
+                    gc.collect()
+                    jax.clear_caches()
                     
                     # either last iteration of round (have to do AL), or trigger to redo AL from NTK value
-                    if (r_inside == self.al_every - 1) or self.need_to_redo_active_learning(writer=writer):
+                    if not self.sample_each_round and ((r_inside == self.al_every - 1) or self.need_to_redo_active_learning(writer=writer)):
                         do_anchor = self.select_anchors and (self.current_train_step % self.select_anchors_every == 0)
                         print(f'======= Step {self.current_train_step} - performing active learning =======')
                         self._do_active_learning(do_anchor=do_anchor)
                         print(f'======= Done active learning =======')
-                        solver = self._generate_solver(value_and_grad=self.loss_fn_grad, aux_loss=[self.pde_loss_grad , self.bc_loss_grad])
+                        # if self.reset_sampler_at_al:
+                        solver = self._generate_solver(value_and_grad=self.loss_fn_grad) #TODO: not sure what this does
+                    elif (r_inside == self.al_every - 1):
+                        self.al_data_round[self.current_train_step] = self.current_samples 
 
-                    print(f'completed snapshot at step {self.current_train_step}')
-
-                    # Clean up after each round
-                    gc.collect()
-                    jax.clear_caches()
 
                 # self.net.params = params[0]
                 # self.model.params = params
@@ -970,18 +1170,24 @@ class ModifiedTrainLoop:
         ys = self.data.soln(xs) if ys is None else ys
         return self.soln_error_fn(params, xs, ys)
 
-    def plot_training_data(self, step_idx=None, ax=None):
-        step_idx = list(self.al_data_round.keys())[-1] if step_idx is None else max(k for k in self.al_data_round.keys() if k <= step_idx)
-        samples = self.al_data_round[step_idx]
+    def plot_training_data(self, samples=None, step_idx=None, ax=None, marker_size=8):
+        colours = ['cyan','orange', 'purple', 'red', 'purple', 'brown', 'pink', 'grey', 'green', 'magenta']
+        colours = cycle(colours)
+        if step_idx is None and samples is None:
+            samples = self.current_samples
+        else:
+            step_idx = list(self.al_data_round.keys())[-1] if step_idx is None else max(k for k in self.al_data_round.keys() if k <= step_idx)
+            if samples is None:
+                samples = self.al_data_round[step_idx]
         if ax is None:
             fig, ax = plt.subplots()
         else:
             fig = None
-        ax.plot(samples['res'][:, 0], samples['res'][:, 1], 'o', color='black')
+        ax.plot(samples['res'][:, 0], samples['res'][:, 1], 'o', color='black', markersize=marker_size)
         if 'anc' in samples.keys():
-            ax.plot(samples['anc'][:, 0], samples['anc'][:, 1], '^', color='blue')
+            ax.plot(samples['anc'][:, 0], samples['anc'][:, 1], '^', color='blue', markersize=marker_size)
         for i, bc_pts in enumerate(samples['bcs']):
-            ax.plot(bc_pts[:, 0], bc_pts[:, 1], ls='', marker=(i+4,0,0), color=f'C{i+1}')
+            ax.plot(bc_pts[:, 0], bc_pts[:, 1], ls='', marker=(i+4,0,0), color=next(colours), markersize=marker_size)
         if fig is not None:
             plt.close(fig)
         return fig, ax

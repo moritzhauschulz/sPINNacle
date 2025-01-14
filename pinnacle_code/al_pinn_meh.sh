@@ -23,17 +23,34 @@ echo "Current directory: $current_dir"
 # "--hidden_layers 8 --eqn conv-1d --use_pdebench --data_seed 40 --const 1.0 --train_steps 200000 --num_points 200 --mem_pts_total_budget 1000"
 
 pdes=(
-    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 200000 --num_points 100 --mem_pts_total_budget 300"
-    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 10000 --num_points 100 --mem_pts_total_budget 300"
-    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 200000 --num_points 100 --mem_pts_total_budget 300 --scaling 10"
-    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 10000 --num_points 100 --mem_pts_total_budget 300 --scaling 10"
+    "--hidden_layers 4 --eqn poisson-2d  --data_seed 20 --const 1 --train_steps 20000 --num_points 100 --mem_pts_total_budget 300 --rand_res_prop 0.5 --scaling 10."
+    "--hidden_layers 4 --eqn poisson-2d  --data_seed 20 --const 1 --train_steps 30000 --num_points 100 --mem_pts_total_budget 300 --rand_res_prop 0.5 --scaling 1."
+
+    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 100000 --num_points 100 --mem_pts_total_budget 300"
+    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 30000 --num_points 100 --mem_pts_total_budget 300"
+    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 200000 --num_points 100 --mem_pts_total_budget 300 --scaling 0.1"
+    "--hidden_layers 4 --eqn burgers-1d --use_pdebench --data_seed 20 --const 0.02 --train_steps 30000 --num_points 100 --mem_pts_total_budget 300 --scaling 0.1"
 )
 
 algs=(
-    "--method random"
-    "--method random --optim multiadam"
-    "--method random --autoscale_loss_w_bcs"
+    "--method random --al_every 1000"
+    "--method random --optim multiadam --al_every 1000"
+    "--method random --autoscale_loss_w_bcs --al_every 1000"
+    "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --al_every 1000"
+    "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --optim multiadam --al_every 1000"
+    "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --autoscale_loss_w_bcs --al_every 1000"
+    "--method random --lra_loss_w_bcs --al_every 1000"
+
+    "--method kmeans --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --al_every 1000"
+    "--method sampling --eig_weight_method alignment v --random_points_for_weights --eig_sampling pseudo --eig_memory --auto_al --autoscale_loss_w_bcs --al_every 1000"
+    
+    "--method random --sample_each_round"
+    "--method random --optim multiadam --sample_each_round"
+    "--method random --autoscale_loss_w_bcs --sample_each_round"
     "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al"
+    "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --optim multiadam"
+    "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --autoscale_loss_w_bcs"
+
     "--method sampling --optim multiadam --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al"
     "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --autoscale_loss_w_bcs"
     "--method sampling --eig_weight_method alignment --eig_sampling pseudo --eig_memory --auto_al --autoscale_loss_w_bcs --autoscale_first"

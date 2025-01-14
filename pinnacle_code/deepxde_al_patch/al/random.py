@@ -38,7 +38,7 @@ class RandomPointSelector(PointSelector):
         self.res_proportion = res_proportion
         self.method = method
         
-    def generate_samples(self):
+    def generate_samples(self, verbose=True):
         
         n_anc_total = self.anchor_budget + (
             self.current_samples['anc'].shape[0] if self.current_samples is not None and ('anc' in self.current_samples)
@@ -47,22 +47,24 @@ class RandomPointSelector(PointSelector):
         n_res = int(self.res_proportion * self.mem_pts_total_budget) if (len(self.bcs) > 0) else (self.mem_pts_total_budget)
         n_per_bc = (self.mem_pts_total_budget - n_res) // len(self.bcs) if (len(self.bcs) > 0) else 0
         
-        print(f'Will select {n_res} collocation points.')
-        print(f'Will select {n_per_bc} points for each of the {len(self.bcs)} boundary conditions.')
-        print(f'Will select {self.anchor_budget} extra anchors, giving total of {n_anc_total} anchors.')
-        
+        if verbose:
+            print(f'Will select {n_res} collocation points.')
+            print(f'Will select {n_per_bc} points for each of the {len(self.bcs)} boundary conditions.')
+            print(f'Will select {self.anchor_budget} extra anchors, giving total of {n_anc_total} anchors.')
+            
         returned_pts = {
             'res': jnp.array(self.data.geom.random_points(n_res, random=self.method)),
             'bcs': []
         }
-        for bc in self.data.bcs:
+        for i, bc in enumerate(self.data.bcs):
             if isinstance(bc, dde.icbc.boundary_conditions.PointSetBC):
                 idxs = jnp.array(np.random.choice(a=bc.points.shape[0], size=n_per_bc, replace=False))
                 xs = bc.points[idxs, :]
             elif isinstance(bc, dde.icbc.initial_conditions.IC):
                 xs = jnp.array(self.data.geom.random_initial_points(n_per_bc))
             else:
-                xs = jnp.array(self.data.geom.random_boundary_points(n_per_bc))
+                # xs = jnp.array(self.data.geom.random_boundary_points(n_per_bc))
+                xs = jnp.array(bc.geom.random_boundary_points(n_per_bc))
             returned_pts['bcs'].append(xs)
         
         if self.anchor_budget > 0:

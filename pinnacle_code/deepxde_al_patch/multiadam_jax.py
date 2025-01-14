@@ -21,7 +21,7 @@ def multiadam(
     weight_decay: float = 0.0,
     loss_group_idx: Optional[Sequence[int]] = None,
     group_weights: Optional[Sequence[float]] = None,
-    agg_momentum: bool = True,
+    agg_momentum: bool = False,
     agg_betas: Optional[tuple] = None,
     amsgrad: bool = False,
     maximize: bool = False,
@@ -29,7 +29,7 @@ def multiadam(
 ) -> optax.GradientTransformation:
     """MultiAdam optimizer matching PyTorch implementation exactly."""
     
-    n_groups = 2 if loss_group_idx is None else len(loss_group_idx) + 1
+    n_groups = 2 if loss_group_idx is None else len(loss_group_idx)
     group_weights = jnp.ones(n_groups) / n_groups if group_weights is None else jnp.array(group_weights)
     
     if agg_momentum and agg_betas is None:
